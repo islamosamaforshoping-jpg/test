@@ -1,0 +1,7 @@
+body.student-qr-open{overflow:hidden}
+.student-qr-trigger{margin-top:8px}
+.qr-block img{display:block;width:112px;height:112px;max-width:100%;margin-inline:auto;object-fit:contain}
+.student-qr-screen{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:max(20px,env(safe-area-inset-top)) 16px max(20px,env(safe-area-inset-bottom));background:#fff}
+.student-qr-screen img{width:min(88vmin,600px);height:min(88vmin,600px);max-width:100%;max-height:100%;object-fit:contain;image-rendering:pixelated}
+.student-qr-close{position:absolute;top:max(12px,env(safe-area-inset-top));inset-inline-start:12px;width:48px;height:48px;padding:0;font-size:26px}
+@media(max-width:740px){.student-qr-trigger{width:100%}}

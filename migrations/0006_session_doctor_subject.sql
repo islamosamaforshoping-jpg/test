@@ -1,0 +1,2 @@
+ALTER TABLE course_sessions ADD COLUMN doctor_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE course_sessions ADD COLUMN subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL;
