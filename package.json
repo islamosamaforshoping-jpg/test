@@ -1,0 +1,48 @@
+{
+  "name": "course-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "db:local": "node scripts/local-postgres.js",
+    "setup": "node scripts/setup.js",
+    "storage:setup": "node scripts/setup-course-library-storage.js",
+    "test": "node --test",
+    "db:migrate": "node scripts/migrate.js",
+    "db:upgrade": "node scripts/db-upgrade.js",
+    "check": "node --check server/app.js && node --check server/db.js && node --check server/ai-assistant.js && node --check server/academic.js && node --check server/share-links.js && node --check server/system-reset.js && node --check server/database-backup.js && node --check server/daily-report.js && node --check server/receipt.js && node --check server/report.js && node --check server/pdf.js && node --check server/session-reminders.js && node --check server/index.js && node --check api/index.js && node --check scripts/setup.js && node --check scripts/setup-course-library-storage.js && node --check scripts/migrate.js && node --check scripts/db-upgrade.js && node --check scripts/local-postgres.js && node --check public/app.js && node --check public/ai-chat.js && node --check public/certificate-print.js && node --check tests/ai-assistant.test.js && node --check tests/system-reset.test.js && node --check tests/daily-report.test.js && node --check tests/payment-receipt.test.js && node --check tests/share-links.test.js && node --check tests/share-routes.test.js && node --check tests/database-backup.test.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1144.0",
+    "@aws-sdk/s3-presigned-post": "^3.1144.0",
+    "@aws-sdk/s3-request-presigner": "^3.1144.0",
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11",
+    "@fontsource/ibm-plex-sans-arabic": "^5.3.0",
+    "@neon/config": "^1.8.3",
+    "@neon/env": "^1.4.8",
+    "@neondatabase/serverless": "^1.1.0",
+    "@sparticuz/chromium": "^153.0.0",
+    "dotenv": "^18.0.5",
+    "exceljs": "^4.4.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "flatpickr": "^4.6.13",
+    "helmet": "^8.1.0",
+    "html5-qrcode": "^2.3.8",
+    "pg": "^8.23.1",
+    "playwright": "^1.56.0",
+    "qrcode": "^1.5.4",
+    "ws": "^8.22.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "^6.3.289"
+  }
+}

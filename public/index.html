@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173b35">
+  <meta name="description" content="S.T.C - مركز السويس للتدريب">
+  <title>S.T.C - مركز السويس للتدريب</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="shortcut icon" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="S.T.C">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/vendor/flatpickr/flatpickr.min.css">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/student-qr.css">
+  <link rel="stylesheet" href="/ai-chat.css">
+  <script src="/vendor/flatpickr/flatpickr.min.js"></script>
+  <script src="/vendor/flatpickr/l10n/ar.js"></script>
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <div id="global-loading-screen" class="global-loading-screen" role="status" aria-live="polite" aria-label="جاري تحميل S.T.C - مركز السويس للتدريب">
+    <div class="global-loading-content">
+      <div class="global-loading-logo" aria-hidden="true"><img src="/favicon.svg" alt=""></div>
+      <strong class="global-loading-name">S.T.C - مركز السويس للتدريب</strong>
+      <p class="global-loading-label">جاري التحميل...</p>
+      <div class="global-loading-dots" aria-hidden="true"><span>●</span><span>●</span><span>●</span></div>
+    </div>
+  </div>
+  <div id="app"><div class="boot" aria-label="جارٍ التحميل"><span class="spinner"></span></div></div>
+  <div id="toast-root" aria-live="polite"></div>
+  <div id="ai-chat-root"></div>
+  <div id="welcome-splash" class="welcome-splash" hidden role="status" aria-live="polite" aria-label="رسالة ترحيب">
+    <div class="welcome-splash-content">
+      <div class="welcome-splash-logo" aria-hidden="true"><img src="/favicon.svg" alt=""></div>
+      <h1 class="welcome-splash-name" data-welcome-splash-name></h1>
+      <div class="welcome-splash-divider" aria-hidden="true"></div>
+      <p class="welcome-splash-credit">من طالب ممتن</p>
+      <p class="welcome-splash-author">اسلام اسامه احمد</p>
+      <div class="welcome-splash-dots" aria-hidden="true"><span>●</span><span>●</span><span>●</span></div>
+    </div>
+  </div>
+  <div id="welcome-modal" class="welcome-modal" hidden aria-hidden="true">
+    <div class="welcome-message-backdrop" data-welcome-backdrop></div>
+    <section class="welcome-message-card" role="dialog" aria-modal="true" aria-labelledby="welcome-title" aria-describedby="welcome-message" tabindex="-1">
+      <p class="welcome-message-kicker">رسالة ليك 💚</p>
+      <h2 id="welcome-title" class="welcome-message-name"></h2>
+      <p id="welcome-message" class="welcome-message-body"></p>
+      <p class="welcome-message-signature">من اسلام اسامه احمد</p>
+      <button class="welcome-message-button" type="button" data-welcome-close>تمام، شكرًا 💚</button>
+    </section>
+  </div>
+</body>
+</html>

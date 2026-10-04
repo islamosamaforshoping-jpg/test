@@ -1,0 +1,11 @@
+{
+  "name": "S.T.C - مركز السويس للتدريب",
+  "short_name": "S.T.C",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1e1b",
+  "theme_color": "#173b35",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

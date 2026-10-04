@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="S.T.C logo">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38b48b"/>
+      <stop offset="100%" stop-color="#173b35"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="24" fill="#0c2b27"/>
+  <path d="M19 52.5 64 25l45 27.5-45 27.5L19 52.5zm12.5 9.3 32.5 20 32.5-20-32.5-20-32.5 20z" fill="url(#grad)"/>
+  <path d="M38 65.5v20.5c10 7.5 22 11.2 26 11.2s16-3.7 26-11.2V65.5" fill="none" stroke="#dffaf2" stroke-width="8" stroke-linecap="round"/>
+</svg>
