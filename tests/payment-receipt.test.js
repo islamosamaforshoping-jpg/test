@@ -58,50 +58,57 @@ test('payment receipt endpoint downloads a PDF for authenticated staff', async (
     voided_at: null, student_code: 'S-123', student_name: 'طالب اختبار',
     level_name: 'الفرقة الأولى', group_name: 'المجموعة أ', recorded_by: 'دنيا'
   };
+  const mockQuery = async (sql, params = []) => {
+    if (sql.includes('FROM users WHERE username=?')) return { rows: [user] };
+    if (sql.includes('FROM users WHERE id=?')) return { rows: [user] };
+    if (sql.includes('DELETE FROM auth_sessions')) return { rows: [] };
+    if (sql.startsWith('INSERT INTO auth_sessions')) {
+      session = { token_hash: params[0], csrf: params[2], expires_at: params[3] };
+      return { rows: [] };
+    }
+    if (sql.startsWith('INSERT INTO audit_logs')) return { rows: [] };
+    if (sql.includes('FROM auth_sessions a JOIN users u')) {
+      return { rows: session && session.token_hash === params[0] && session.expires_at > params[1]
+        ? [{ ...user, token_hash: session.token_hash, csrf: session.csrf }]
+        : [] };
+    }
+    if (sql.includes("FROM system_wipe_requests") && sql.includes("status='processing'")) return { rows: [] };
+    if (sql.includes('FROM payments p') && sql.includes('WHERE p.id=?')) {
+      return { rows: payment.id === params[0] ? [{ ...payment }] : [] };
+    }
+    if (sql.includes('FROM students s JOIN levels l')) {
+      return { rows: [{
+        id: 42, name: payment.student_name, code: payment.student_code,
+        username: 'student', level_name: payment.level_name, group_name: payment.group_name,
+        level_id: 3, group_id: 8, course_price_snapshot: 20000, price: 20000
+      }] };
+    }
+    if (sql.includes('FROM course_settings WHERE id=1')) return { rows: [] };
+    if (sql.includes('COALESCE(SUM(amount),0) total FROM payments WHERE student_id=?')) {
+      return { rows: [{ total: payment.amount }] };
+    }
+    if (sql.includes('SELECT amount,created_at FROM payments WHERE student_id=?')) return { rows: [] };
+    if (sql.includes('LEFT JOIN attendance')) return { rows: [] };
+    if (sql.includes('FROM course_sessions cs')) return { rows: [] };
+    if (sql.includes('FROM payments p')) return { rows: [] };
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
   const db = {
-    pool: {
-      async connect() {
+    client: {
+      async transaction() {
         return {
-          async query() { return { rows: [] }; },
-          release() {}
+          async execute({ sql, args }) {
+            const res = await mockQuery(sql, args);
+            return { rows: res.rows || [], rowsAffected: res.changes || 0 };
+          },
+          async commit() {},
+          async rollback() {},
+          close() {}
         };
       }
     },
-    async query(sql, params = []) {
-      if (sql.includes('FROM users WHERE username=?')) return { rows: [user] };
-      if (sql.includes('FROM users WHERE id=?')) return { rows: [user] };
-      if (sql.includes('DELETE FROM auth_sessions')) return { rows: [] };
-      if (sql.startsWith('INSERT INTO auth_sessions')) {
-        session = { token_hash: params[0], csrf: params[2], expires_at: params[3] };
-        return { rows: [] };
-      }
-      if (sql.startsWith('INSERT INTO audit_logs')) return { rows: [] };
-      if (sql.includes('FROM auth_sessions a JOIN users u')) {
-        return { rows: session && session.token_hash === params[0] && session.expires_at > params[1]
-          ? [{ ...user, token_hash: session.token_hash, csrf: session.csrf }]
-          : [] };
-      }
-      if (sql.includes("FROM system_wipe_requests") && sql.includes("status='processing'")) return { rows: [] };
-      if (sql.includes('FROM payments p') && sql.includes('WHERE p.id=?')) {
-        return { rows: payment.id === params[0] ? [{ ...payment }] : [] };
-      }
-      if (sql.includes('FROM students s JOIN levels l')) {
-        return { rows: [{
-          id: 42, name: payment.student_name, code: payment.student_code,
-          username: 'student', level_name: payment.level_name, group_name: payment.group_name,
-          level_id: 3, group_id: 8, course_price_snapshot: 20000, price: 20000
-        }] };
-      }
-      if (sql.includes('FROM course_settings WHERE id=1')) return { rows: [] };
-      if (sql.includes('COALESCE(SUM(amount),0) total FROM payments WHERE student_id=?')) {
-        return { rows: [{ total: payment.amount }] };
-      }
-      if (sql.includes('SELECT amount,created_at FROM payments WHERE student_id=?')) return { rows: [] };
-      if (sql.includes('LEFT JOIN attendance')) return { rows: [] };
-      if (sql.includes('FROM course_sessions cs')) return { rows: [] };
-      if (sql.includes('FROM payments p')) return { rows: [] };
-      throw new Error(`Unexpected query: ${sql}`);
-    }
+    query: mockQuery
   };
   const app = createApp({ db, secureCookies: false });
   const server = app.listen(0, '127.0.0.1');
@@ -242,81 +249,68 @@ test('payment API validates amounts and safely accepts idempotent retries', asyn
   ];
   const sessions = new Map();
   const payments = [];
-  const lockTails = new Map();
-  const lockReleases = new Map();
   let nextPaymentId = 1;
   const student = {
     id: 42, name: 'طالب اختبار', code: 'S-123', username: 'student', user_id: 99,
     active: 1, cancelled_at: null, level_name: 'الفرقة الأولى', group_name: 'المجموعة أ',
     level_id: 3, group_id: 8, course_price_snapshot: 20000, price: 20000
   };
-  const unlockFirstTransactionLock = () => {
-    const acquired = [...lockReleases.values()].find(queue => queue.length)?.shift();
-    acquired?.();
+
+  const mockQuery = async (sql, params = []) => {
+    if (sql.includes('FROM users WHERE username=?')) return { rows: users.filter(user => user.username === params[0]) };
+    if (sql.includes('FROM users WHERE id=?')) return { rows: users.filter(user => user.id === params[0]) };
+    if (sql.includes('DELETE FROM auth_sessions')) return { rows: [] };
+    if (sql.startsWith('INSERT INTO auth_sessions')) {
+      sessions.set(params[0], { token_hash: params[0], user_id: params[1], csrf: params[2], expires_at: params[3] });
+      return { rows: [] };
+    }
+    if (sql.includes('FROM auth_sessions a JOIN users u')) {
+      const session = sessions.get(params[0]);
+      const user = users.find(item => item.id === session?.user_id);
+      return { rows: session && user && session.expires_at > params[1]
+        ? [{ ...user, token_hash: session.token_hash, csrf: session.csrf }]
+        : [] };
+    }
+    if (sql.includes("FROM system_wipe_requests") && sql.includes("status='processing'")) return { rows: [] };
+    if (sql.includes('SELECT * FROM payments WHERE request_key=?')) {
+      return { rows: payments.filter(payment => payment.request_key === params[0]) };
+    }
+    if (sql.includes('SELECT id FROM students WHERE id=? FOR UPDATE') || sql.includes('SELECT id FROM students WHERE id=?')) {
+      return { rows: params[0] === student.id ? [{ id: student.id }] : [] };
+    }
+    if (sql.includes('FROM students s') && sql.includes('level_name')) return { rows: params[0] === student.id ? [{ ...student }] : [] };
+    if (sql.includes('COALESCE(SUM(amount),0) total FROM payments WHERE student_id=?')) {
+      return { rows: [{ total: payments.filter(payment => payment.student_id === params[0] && !payment.voided_at).reduce((sum, payment) => sum + payment.amount, 0) }] };
+    }
+    if (sql.startsWith('INSERT INTO payments(')) {
+      const [studentId, amount, recordedBy, requestKey] = params;
+      const payment = { id: nextPaymentId++, student_id: studentId, amount, recorded_by: recordedBy, request_key: requestKey, voided_at: null };
+      payments.push(payment);
+      return { rows: [{ id: payment.id }], lastInsertRowid: payment.id, changes: 1 };
+    }
+    if (sql.startsWith('INSERT INTO audit_logs')) return { rows: [] };
+    if (sql.includes('FROM course_settings WHERE id=1')) return { rows: [] };
+    if (sql.includes('SELECT p.*,u.name recorded_by_name')) {
+      return { rows: payments.filter(payment => payment.student_id === params[0]).map(payment => ({ ...payment, recorded_by_name: 'Dunia' })) };
+    }
+    throw new Error(`Unexpected payment API query: ${sql}`);
   };
+
   const db = {
-    pool: {
-      async connect() {
+    client: {
+      async transaction() {
         return {
-          async query(statement) {
-            if (statement === 'COMMIT' || statement === 'ROLLBACK') unlockFirstTransactionLock();
-            return { rows: [] };
+          async execute({ sql, args }) {
+            const res = await mockQuery(sql, args);
+            return { rows: res.rows || [], rowsAffected: res.changes || 0, lastInsertRowid: res.lastInsertRowid };
           },
-          release() {}
+          async commit() {},
+          async rollback() {},
+          close() {}
         };
       }
     },
-    async query(sql, params = []) {
-      if (sql.includes('FROM users WHERE username=?')) return { rows: users.filter(user => user.username === params[0]) };
-      if (sql.includes('FROM users WHERE id=?')) return { rows: users.filter(user => user.id === params[0]) };
-      if (sql.includes('DELETE FROM auth_sessions')) return { rows: [] };
-      if (sql.startsWith('INSERT INTO auth_sessions')) {
-        sessions.set(params[0], { token_hash: params[0], user_id: params[1], csrf: params[2], expires_at: params[3] });
-        return { rows: [] };
-      }
-      if (sql.includes('FROM auth_sessions a JOIN users u')) {
-        const session = sessions.get(params[0]);
-        const user = users.find(item => item.id === session?.user_id);
-        return { rows: session && user && session.expires_at > params[1]
-          ? [{ ...user, token_hash: session.token_hash, csrf: session.csrf }]
-          : [] };
-      }
-      if (sql.includes("FROM system_wipe_requests") && sql.includes("status='processing'")) return { rows: [] };
-      if (sql.includes('pg_advisory_xact_lock')) {
-        const key = params[0];
-        const previous = lockTails.get(key) || Promise.resolve();
-        let release;
-        const current = new Promise(resolve => { release = resolve; });
-        lockTails.set(key, previous.then(() => current));
-        await previous;
-        const queue = lockReleases.get(key) || [];
-        queue.push(release);
-        lockReleases.set(key, queue);
-        return { rows: [] };
-      }
-      if (sql.includes('SELECT * FROM payments WHERE request_key=?')) {
-        return { rows: payments.filter(payment => payment.request_key === params[0]) };
-      }
-      if (sql.includes('SELECT id FROM students WHERE id=? FOR UPDATE')) {
-        return { rows: params[0] === student.id ? [{ id: student.id }] : [] };
-      }
-      if (sql.includes('FROM students s') && sql.includes('level_name')) return { rows: params[0] === student.id ? [{ ...student }] : [] };
-      if (sql.includes('COALESCE(SUM(amount),0) total FROM payments WHERE student_id=?')) {
-        return { rows: [{ total: payments.filter(payment => payment.student_id === params[0] && !payment.voided_at).reduce((sum, payment) => sum + payment.amount, 0) }] };
-      }
-      if (sql.startsWith('INSERT INTO payments(')) {
-        const [studentId, amount, recordedBy, requestKey] = params;
-        const payment = { id: nextPaymentId++, student_id: studentId, amount, recorded_by: recordedBy, request_key: requestKey, voided_at: null };
-        payments.push(payment);
-        return { rows: [{ id: payment.id }], lastInsertRowid: payment.id };
-      }
-      if (sql.startsWith('INSERT INTO audit_logs')) return { rows: [] };
-      if (sql.includes('FROM course_settings WHERE id=1')) return { rows: [] };
-      if (sql.includes('SELECT p.*,u.name recorded_by_name')) {
-        return { rows: payments.filter(payment => payment.student_id === params[0]).map(payment => ({ ...payment, recorded_by_name: 'Dunia' })) };
-      }
-      throw new Error(`Unexpected payment API query: ${sql}`);
-    }
+    query: mockQuery
   };
   const app = createApp({ db, secureCookies: false });
   const server = app.listen(0, '127.0.0.1');

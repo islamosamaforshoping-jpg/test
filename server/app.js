@@ -822,7 +822,6 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     const notifyRemaining = req.body.notify_remaining === undefined ? false : bool(req.body.notify_remaining);
     const customMessage = req.body.notification_message === undefined ? null : text(req.body.notification_message, 'رسالة التذكير', 10, 1000);
     const result = await transaction(db, async () => {
-      await db.query('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [key]);
       const previous = await (await db.query('SELECT * FROM payments WHERE request_key=?', [key])).rows[0];
       if (previous) {
         if (previous.student_id !== id || previous.amount !== amount || previous.recorded_by !== req.user.id) fail(409, 'مفتاح عملية مستخدم لطلب مختلف');

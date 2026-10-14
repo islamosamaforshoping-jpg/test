@@ -24,73 +24,86 @@ function setup(options = {}) {
   ]);
   const requests = new Map();
   const storageCalls = [];
-  let truncateSql = '';
+  let deleteSqls = [];
   let studentUsersDeleteSql = '';
   let backupCleanupCount = 0;
   let completionCount = 0;
-  const db = {
-    pool: {
-      connect: async () => ({
-        query: async () => ({ rows: [] }),
-        release() {}
-      })
-    },
-    async query(sql, params = []) {
-      if (sql.includes('FROM users WHERE id=?')) return { rows: users.has(params[0]) ? [{ ...users.get(params[0]) }] : [] };
-      if (sql.includes("FROM system_wipe_requests") && sql.includes("status IN ('pending','processing')")) {
-        const active = [...requests.values()].find(request => ['pending', 'processing'].includes(request.status));
-        return { rows: active ? [{ id: active.id }] : [] };
-      }
-      if (sql.startsWith('INSERT INTO system_wipe_requests')) {
-        requests.set(params[0], { ...pending(), id: params[0], requester_id: params[1], requester_name: params[2], requester_username: params[3], requester_role: params[4], created_at: params[5] });
+  const mockQuery = async (sql, params = []) => {
+    if (sql.includes('FROM users WHERE id=?')) return { rows: users.has(params[0]) ? [{ ...users.get(params[0]) }] : [] };
+    if (sql.includes("FROM system_wipe_requests") && sql.includes("status IN ('pending','processing')")) {
+      const active = [...requests.values()].find(request => ['pending', 'processing'].includes(request.status));
+      return { rows: active ? [{ id: active.id }] : [] };
+    }
+    if (sql.startsWith('INSERT INTO system_wipe_requests')) {
+      requests.set(params[0], { ...pending(), id: params[0], requester_id: params[1], requester_name: params[2], requester_username: params[3], requester_role: params[4], created_at: params[5] });
+      return { rows: [], changes: 1 };
+    }
+    if (sql.includes('FROM system_wipe_requests') && sql.includes('FOR UPDATE')) {
+      const request = requests.get(params[0]);
+      return { rows: request?.status === 'pending' ? [{ ...request }] : [] };
+    }
+    if (sql.includes('FROM system_wipe_requests WHERE id=?')) {
+      const request = requests.get(params[0]);
+      return { rows: request ? [{ ...request }] : [] };
+    }
+    if (sql.includes("FROM users WHERE id=?") && sql.includes('role,active')) {
+      return { rows: users.has(params[0]) ? [{ ...users.get(params[0]) }] : [] };
+    }
+    if (sql.startsWith("UPDATE system_wipe_requests SET status='processing'")) {
+      const request = requests.get(params[4]);
+      Object.assign(request, { status: 'processing', approver_id: params[0], approver_name: params[1], approver_username: params[2], approved_at: params[3] });
+      return { rows: [], changes: 1 };
+    }
+    if (sql.startsWith("UPDATE system_wipe_requests SET status='completed'")) {
+      const request = requests.get(params[1]);
+      Object.assign(request, { status: 'completed', finished_at: params[0], failure_reason: '' });
+      return { rows: [], changes: 1 };
+    }
+    if (sql.startsWith("UPDATE system_wipe_requests SET status='failed'")) {
+      const request = requests.get(params[2]);
+      if (request?.status === 'processing') Object.assign(request, { status: 'failed', finished_at: params[0], failure_reason: params[1] });
+      return { rows: [], changes: 1 };
+    }
+    if (sql.startsWith("UPDATE system_wipe_requests SET status='cancelled'")) {
+      const request = requests.get(params[1]);
+      if (request?.requester_id === params[2] && request.status === 'pending') {
+        Object.assign(request, { status: 'cancelled', finished_at: params[0] });
         return { rows: [], changes: 1 };
       }
-      if (sql.includes('FROM system_wipe_requests') && sql.includes('FOR UPDATE')) {
-        const request = requests.get(params[0]);
-        return { rows: request?.status === 'pending' ? [{ ...request }] : [] };
-      }
-      if (sql.includes("FROM users WHERE id=?") && sql.includes('role,active')) {
-        return { rows: users.has(params[0]) ? [{ ...users.get(params[0]) }] : [] };
-      }
-      if (sql.startsWith("UPDATE system_wipe_requests SET status='processing'")) {
-        const request = requests.get(params[4]);
-        Object.assign(request, { status: 'processing', approver_id: params[0], approver_name: params[1], approver_username: params[2], approved_at: params[3] });
-        return { rows: [], changes: 1 };
-      }
-      if (sql.startsWith("UPDATE system_wipe_requests SET status='completed'")) {
-        const request = requests.get(params[1]);
-        Object.assign(request, { status: 'completed', finished_at: params[0], failure_reason: '' });
-        return { rows: [], changes: 1 };
-      }
-      if (sql.startsWith("UPDATE system_wipe_requests SET status='failed'")) {
-        const request = requests.get(params[2]);
-        if (request?.status === 'processing') Object.assign(request, { status: 'failed', finished_at: params[0], failure_reason: params[1] });
-        return { rows: [], changes: 1 };
-      }
-      if (sql.startsWith("UPDATE system_wipe_requests SET status='cancelled'")) {
-        const request = requests.get(params[1]);
-        if (request?.requester_id === params[2] && request.status === 'pending') {
-          Object.assign(request, { status: 'cancelled', finished_at: params[0] });
-          return { rows: [], changes: 1 };
-        }
-        return { rows: [], changes: 0 };
-      }
-      if (sql.includes('FROM system_wipe_requests ORDER BY created_at')) return { rows: [...requests.values()].map(row => ({ ...row })) };
-      if (sql.includes('FROM information_schema.tables')) {
-        return { rows: ['users', 'students', 'course_settings', 'system_wipe_requests', 'schema_migrations', 'neon_data_migrations'].map(table_name => ({ table_name })) };
-      }
-      if (sql.startsWith('TRUNCATE TABLE')) {
-        truncateSql = sql;
-        return { rows: [] };
-      }
+      return { rows: [], changes: 0 };
+    }
+    if (sql.includes('FROM system_wipe_requests ORDER BY created_at')) return { rows: [...requests.values()].map(row => ({ ...row })) };
+    if (sql.includes('FROM sqlite_master') || sql.includes('FROM information_schema.tables')) {
+      return { rows: ['users', 'students', 'course_settings', 'system_wipe_requests', 'schema_migrations', 'neon_data_migrations'].map(name => ({ name, table_name: name })) };
+    }
+    if (sql.startsWith('DELETE FROM "students"') || sql.startsWith('DELETE FROM') || sql.startsWith('TRUNCATE TABLE')) {
+      if (sql !== "DELETE FROM users WHERE role='student'") deleteSqls.push(sql);
       if (sql === "DELETE FROM users WHERE role='student'") {
         studentUsersDeleteSql = sql;
         for (const [id, user] of users) if (user.role === 'student') users.delete(id);
-        return { rows: [], changes: 0 };
       }
-      throw new Error(`Unexpected query in test: ${sql}`);
+      return { rows: [], changes: 0 };
     }
+    throw new Error(`Unexpected query in test: ${sql}`);
   };
+
+  const db = {
+    client: {
+      async transaction() {
+        return {
+          async execute({ sql, args }) {
+            const res = await mockQuery(sql, args);
+            return { rows: res.rows || [], rowsAffected: res.changes || 0 };
+          },
+          async commit() {},
+          async rollback() {},
+          close() {}
+        };
+      }
+    },
+    query: mockQuery
+  };
+
   const routes = new Map();
   const app = {
     get(path, handler) { routes.set(`GET ${path}`, handler); },
@@ -113,7 +126,7 @@ function setup(options = {}) {
   return {
     password, requests, routes, storageCalls,
     get users() { return [...users.values()]; },
-    get truncateSql() { return truncateSql; },
+    get deleteSqls() { return deleteSqls; },
     get studentUsersDeleteSql() { return studentUsersDeleteSql; },
     get backupCleanupCount() { return backupCleanupCount; },
     get completionCount() { return completionCount; }
@@ -187,11 +200,11 @@ test('a different doctor approval deletes storage, backs up, and all application
   assert.equal(result.response.statusCode, 200);
   assert.equal(result.response.payload.ok, true);
   assert.equal(state.requests.get('wipe-request').status, 'completed');
-  assert.doesNotMatch(state.truncateSql, /"users"/);
-  assert.match(state.truncateSql, /"students"/);
-  assert.match(state.truncateSql, /RESTART IDENTITY CASCADE$/);
-  assert.doesNotMatch(state.truncateSql, /"system_wipe_requests"/);
-  assert.doesNotMatch(state.truncateSql, /"schema_migrations"/);
+  const allDeletes = state.deleteSqls.join('\n');
+  assert.doesNotMatch(allDeletes, /"users"/);
+  assert.match(allDeletes, /"students"/);
+  assert.doesNotMatch(allDeletes, /"system_wipe_requests"/);
+  assert.doesNotMatch(allDeletes, /"schema_migrations"/);
   assert.equal(state.studentUsersDeleteSql, "DELETE FROM users WHERE role='student'");
   assert.deepEqual(state.users.map(({ username, role }) => ({ username, role })), [
     { username: 'assistant', role: 'assistant' },
@@ -215,7 +228,7 @@ test('storage configuration errors return a clear failure without truncating app
     user: { id: 20, role: 'doctor', name: 'Doctor' }, params: { id: 'wipe-request' }
   });
   assert.equal(result.error.status, 503);
-  assert.equal(state.truncateSql, '');
+  assert.equal(state.deleteSqls.length, 0);
   assert.equal(state.requests.get('wipe-request').status, 'failed');
   assert.match(state.requests.get('wipe-request').failure_reason, /تخزين المكتبة غير مهيأ/);
 });

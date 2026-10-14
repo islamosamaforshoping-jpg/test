@@ -1,8 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import pg from 'pg';
-
-const { Pool } = pg;
+import { createClient } from '@libsql/client';
 
 const transactionContext = new AsyncLocalStorage();
 
@@ -34,91 +32,62 @@ export function today() {
   }).format(new Date());
 }
 
-function postgresPlaceholders(statement) {
-  let index = 0;
-  let quote = null;
-  let result = '';
-  for (let position = 0; position < statement.length; position++) {
-    const character = statement[position];
-    if (quote) {
-      result += character;
-      if (character === quote) {
-        if (statement[position + 1] === quote) result += statement[++position];
-        else quote = null;
-      }
-    } else if (character === "'" || character === '"') {
-      quote = character;
-      result += character;
-    } else if (character === '?') {
-      result += `$${++index}`;
-    } else {
-      result += character;
-    }
-  }
-  return result;
-}
+export function openDatabase(options = {}) {
+  const url = options.url || process.env.TURSO_DATABASE_URL || 'file::memory:';
+  const authToken = options.authToken || process.env.TURSO_AUTH_TOKEN;
+  const client = createClient({ url, authToken });
 
-function postgresStatement(statement) {
-  let sql = statement;
-  const ignoredConflict = /^\s*INSERT\s+OR\s+IGNORE\s+INTO\b/i.test(sql);
-  sql = sql.replace(/^(\s*)INSERT\s+OR\s+IGNORE\s+INTO\b/i, '$1INSERT INTO');
-  const isInsert = /^\s*INSERT\s+INTO\b/i.test(sql);
-  const insertMatch = sql.match(/^\s*INSERT\s+INTO\s+(?:"([^"]+)"|([a-z_][a-z\d_]*))/i);
-  const insertTable = (insertMatch?.[1] || insertMatch?.[2])?.toLowerCase();
-  const hasIdPrimaryKey = !['auth_sessions', 'level_course_prices', 'schema_migrations'].includes(insertTable);
-  const hasReturning = /\bRETURNING\b/i.test(sql);
-  const hasConflictClause = /\bON\s+CONFLICT\b/i.test(sql);
-  if (ignoredConflict && !hasConflictClause) sql = `${sql.trimEnd()} ON CONFLICT DO NOTHING`;
-  if (isInsert && hasIdPrimaryKey && !hasReturning) sql = `${sql.trimEnd()} RETURNING id`;
-  return postgresPlaceholders(sql);
-}
-
-export function openDatabase() {
-  const connectionString = process.env.DATABASE_URL_LOCAL || process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL_LOCAL or DATABASE_URL is required to connect to Postgres.');
-  const pool = new Pool({ connectionString });
-  return {
-    pool,
+  const db = {
+    client,
     async query(statement, parameters = []) {
-      const client = transactionContext.getStore();
-      const result = await (client || pool).query(postgresStatement(statement), parameters);
-      const numericTypes = new Set([20, 21, 23, 700, 701, 1700]);
-      const numericColumns = result.fields
-        .map((field, index) => numericTypes.has(field.dataTypeID) ? index : -1)
-        .filter(index => index >= 0);
-      for (const row of result.rows) {
-        for (const index of numericColumns) {
-          if (typeof row[result.fields[index].name] === 'string') {
-            row[result.fields[index].name] = Number(row[result.fields[index].name]);
-          }
-        }
-      }
+      const activeTx = transactionContext.getStore();
+      if (activeTx) return activeTx.query(statement, parameters);
+      const res = await client.execute({ sql: statement, args: parameters });
+      const rows = res.rows || [];
       return {
-        ...result,
-        changes: result.rowCount,
-        lastInsertRowid: result.rows?.[0]?.id
+        rows,
+        changes: res.rowsAffected,
+        rowCount: rows.length || res.rowsAffected,
+        lastInsertRowid: res.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : undefined
       };
     },
-    close: () => pool.end()
+    close: () => client.close()
   };
+
+  return db;
 }
 
 export async function transaction(db, callback) {
-  const activeClient = transactionContext.getStore();
-  if (activeClient) return callback(activeClient);
+  const activeTx = transactionContext.getStore();
+  if (activeTx) return callback(activeTx);
 
-  const client = await db.pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await transactionContext.run(client, callback);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
+  if (db?.client?.transaction) {
+    const tx = await db.client.transaction('write');
+    const txWrapper = {
+      async query(statement, parameters = []) {
+        const res = await tx.execute({ sql: statement, args: parameters });
+        const rows = res?.rows || [];
+        return {
+          rows,
+          changes: res?.rowsAffected ?? 0,
+          rowCount: rows.length || res?.rowsAffected || 0,
+          lastInsertRowid: res?.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : undefined
+        };
+      }
+    };
+    try {
+      const result = await transactionContext.run(txWrapper, () => callback(db));
+      await tx.commit();
+      return result;
+    } catch (error) {
+      await tx.rollback();
+      throw error;
+    } finally {
+      tx.close();
+    }
   }
+
+  return callback(db);
 }
 
 export async function audit(db, actor, action, entity, id, details = {}) {
