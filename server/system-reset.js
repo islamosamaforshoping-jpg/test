@@ -28,23 +28,7 @@ async function recoverStaleRequest(db) {
 }
 
 export async function withSystemDataLock(db, callback) {
-  const client = await db.pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock($1)', [SYSTEM_DATA_LOCK_ID]);
-    const result = await callback();
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    try {
-      await client.query('ROLLBACK');
-    } catch (rollbackError) {
-      console.error('Failed to release the system-data transaction lock:', rollbackError);
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
+  return transaction(db, callback);
 }
 
 function createStorageClient() {
