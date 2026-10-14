@@ -101,7 +101,7 @@ test('student balance uses only their authenticated student record and payment r
       }
       if (sql.includes('FROM payments WHERE student_id=?')) return { rows: [{ total: 80000 }] };
       if (sql.includes('INSERT INTO ai_chat_messages')) {
-        return { rows: [{ id: 1, created_at: '2026-10-04T18:00:00Z' }] };
+        return { rows: [{ id: 1, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 1 };
       }
       throw new Error(`Unexpected query: ${sql}`);
     }
@@ -133,7 +133,7 @@ test('assistant can access student results through AI', async () => {
           student_name: 'طالب', code: 'S1', score: 18, total_questions: 20, percentage: 90
         }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 2, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 2, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 2 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -155,7 +155,7 @@ test('staff can look up a named student and get actual payment totals', async ()
         if (sql.includes('SELECT message,response FROM ai_chat_messages')) return { rows: [] };
         if (sql.includes('DELETE FROM ai_pending_actions')) return { rows: [], changes: 0 };
         if (sql.includes('FROM students s JOIN levels l')) {
-          assert.match(sql, /s\.name ILIKE/);
+          assert.match(sql, /s\.name LIKE/);
           assert.deepEqual(params, ['%اسلام اسامه%', '%اسلام اسامه%']);
           return { rows: [{
             id: 7, name: 'اسلام اسامه', code: 'ST7', level_name: 'الفرقة الأولى',
@@ -163,7 +163,7 @@ test('staff can look up a named student and get actual payment totals', async ()
             payment_status: 'دفع جزئي'
           }] };
         }
-        if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 8, created_at: '2026-10-04T18:00:00Z' }] };
+        if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 8, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 8 };
         throw new Error(`Unexpected query: ${sql}`);
       }
     };
@@ -193,7 +193,7 @@ test('a payment question about a named student uses the finance lookup', async (
             payment_status: 'دفع جزئي'
           }] };
         }
-        if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 9, created_at: '2026-10-04T18:00:00Z' }] };
+        if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 9, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 9 };
         throw new Error(`Unexpected query: ${sql}`);
       }
     };
@@ -223,7 +223,7 @@ test('a finance follow-up reuses the previous named student', async () => {
           payment_status: 'دفع جزئي'
         }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 11, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 11, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 11 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -254,7 +254,7 @@ test('ordinal group aliases resolve reports against the actual group id', async 
           return { rows: [] };
         }
         if (sql.includes('FROM payments p')) return { rows: [] };
-        if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 10, created_at: '2026-10-04T18:00:00Z' }] };
+        if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 10, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 10 };
         throw new Error(`Unexpected query: ${sql}`);
       }
     };
@@ -299,9 +299,9 @@ test('group attendance requires explicit confirmation before writing records', a
         pending = { action: params[1], payload: params[2], expires_at: params[3] };
         return { rows: [] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 3, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 3, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 3 };
       if (sql.includes('FROM ai_pending_actions')) return { rows: pending ? [pending] : [] };
-      if (sql.includes('WHERE id=? AND group_id=? AND date=? AND cancelled=0 FOR UPDATE')) {
+      if (sql.includes('WHERE id=? AND group_id=? AND date=? AND cancelled=0')) {
         return { rows: [{
           id: 3, group_id: 8, date: params[2], title: 'محاضرة الحساب', cancelled: 0
         }] };
@@ -358,7 +358,7 @@ test('a short follow-up date reuses the previous schedule intent', async () => {
         }] };
       }
       if (sql.includes('FROM course_sessions cs') && sql.includes('EXISTS')) return { rows: [] };
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 4, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 4, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 4 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -388,7 +388,7 @@ test('upcoming lecture questions query dates from today onward', async () => {
       if (sql.includes('FROM course_sessions cs') && sql.includes('EXISTS')) {
         return { rows: [{ title: 'محاضرة قادمة', date: today(), start_time: '17:00' }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 6, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 6, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 6 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -419,7 +419,7 @@ test('student group-attendance questions return only that student’s own status
       if (sql.includes('FROM course_sessions cs JOIN enrollments e')) {
         return { rows: [{ title: 'محاضرة الحساب', start_time: '17:00', attendance_id: 10 }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 5, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 5, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 5 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -447,7 +447,7 @@ test('staff dues queries return real unpaid amounts and remain staff-only', asyn
           price: 120000, paid: 80000, remaining: 40000
         }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 7, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 7, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 7 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -477,7 +477,7 @@ test('doctor results are scoped to the authenticated doctor’s exams', async ()
           total_questions: 20, percentage: 90
         }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 8, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 8, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 8 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -506,7 +506,7 @@ test('assistant upcoming exams are not restricted to an individual doctor', asyn
           lecture_date: '2026-10-05', lecture_title: 'محاضرة', doctor_name: 'دكتور'
         }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 14, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 14, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 14 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -543,7 +543,7 @@ test('student upcoming exams are filtered by their level, enrollment, and date',
           lecture_title: 'محاضرة قادمة', doctor_name: 'دكتور'
         }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 9, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 9, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 9 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -579,7 +579,7 @@ test('group report delegates to the existing daily operations report function', 
         return { rows: [{ id: 3, title: 'محاضرة', start_time: '17:00' }] };
       }
       if (sql.includes('FROM payments p')) return { rows: [] };
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 10, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 10, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 10 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -610,7 +610,7 @@ test('staff group attendance returns the current session roster and actual statu
           { name: 'غاب', code: 'S2', status: 'غائب' }
         ] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 11, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 11, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 11 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -639,7 +639,7 @@ test('staff aggregate intents use their matching data queries', async () => {
       async query(sql) {
         if (sql.includes('SELECT message,response FROM ai_chat_messages')) return { rows: [] };
         if (sql.includes('DELETE FROM ai_pending_actions')) return { rows: [], changes: 0 };
-        if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 12, created_at: '2026-10-04T18:00:00Z' }] };
+        if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 12, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 12 };
         aggregateQuery = sql;
         return { rows: [{ total: table === 'paymentsTotal' ? 83000 : 14 }] };
       }
@@ -673,7 +673,7 @@ test('student profile data is selected by the authenticated user id', async () =
           group_id: 8, group_name: 'مجموعة النخيل', level_id: 2, level_name: 'الفرقة الثانية'
         }] };
       }
-      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 13, created_at: '2026-10-04T18:00:00Z' }] };
+      if (sql.includes('INSERT INTO ai_chat_messages')) return { rows: [{ id: 13, created_at: '2026-10-04T18:00:00Z' }], lastInsertRowid: 13 };
       throw new Error(`Unexpected query: ${sql}`);
     }
   };

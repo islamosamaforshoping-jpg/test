@@ -309,7 +309,7 @@ async function ownAttendanceOnDate(db, user, group, date) {
   const rows = (await db.query(`SELECT cs.title,cs.start_time,a.id attendance_id
     FROM course_sessions cs JOIN enrollments e ON e.student_id=? AND e.group_id=cs.group_id
       AND e.starts_on<=cs.date AND (e.ends_on IS NULL OR e.ends_on>cs.date)
-    LEFT JOIN attendance a ON a.session_id=cs.id AND a.student_id=e.student_id
+    LEFT JOIN attendance a ON a.student_id=e.student_id AND a.session_id=cs.id
     WHERE cs.group_id=? AND cs.date=? AND cs.cancelled=0
     ORDER BY cs.start_time,cs.id`, [student.id, group.id, date])).rows;
   return rows;
@@ -344,12 +344,12 @@ async function duesTool(db, group) {
   const params = group ? [group.id] : [];
   const rows = (await db.query(`SELECT s.name,s.code,g.name group_name,l.name level_name,
       s.course_price_snapshot price,COALESCE(p.paid,0) paid,
-      GREATEST(0,s.course_price_snapshot-COALESCE(p.paid,0)) remaining
+      MAX(0,s.course_price_snapshot-COALESCE(p.paid,0)) remaining
     FROM students s JOIN groups_table g ON g.id=s.group_id JOIN levels l ON l.id=s.level_id
     LEFT JOIN (SELECT student_id,SUM(amount) paid FROM payments WHERE voided_at IS NULL GROUP BY student_id) p
       ON p.student_id=s.id
     WHERE s.active=1 AND s.cancelled_at IS NULL
-      AND GREATEST(0,s.course_price_snapshot-COALESCE(p.paid,0))>0${groupFilter}
+      AND MAX(0,s.course_price_snapshot-COALESCE(p.paid,0))>0${groupFilter}
     ORDER BY remaining DESC,s.name,s.id LIMIT 50`, params)).rows;
   return rows;
 }
@@ -415,7 +415,7 @@ async function findStudentsByName(db, name) {
   return (await db.query(`SELECT s.id,s.name,s.code,
       s.course_price_snapshot price,l.name level_name,g.name group_name,
       COALESCE(p.paid,0) paid,
-      GREATEST(0,s.course_price_snapshot-COALESCE(p.paid,0)) remaining,
+      MAX(0,s.course_price_snapshot-COALESCE(p.paid,0)) remaining,
       CASE WHEN s.cancelled_at IS NOT NULL THEN 'ملغي'
         WHEN COALESCE(p.paid,0)=0 THEN 'لم يدفع'
         WHEN COALESCE(p.paid,0)<s.course_price_snapshot THEN 'دفع جزئي'
@@ -424,7 +424,7 @@ async function findStudentsByName(db, name) {
     LEFT JOIN (SELECT student_id,SUM(amount) paid FROM payments WHERE voided_at IS NULL GROUP BY student_id) p
       ON p.student_id=s.id
     WHERE s.active=1 AND s.cancelled_at IS NULL
-      AND (s.name ILIKE ? ESCAPE '!' OR s.code ILIKE ? ESCAPE '!')
+      AND (s.name LIKE ? ESCAPE '!' OR s.code LIKE ? ESCAPE '!')
     ORDER BY s.name,s.id LIMIT 6`, [`%${escaped}%`, `%${escaped}%`])).rows;
 }
 
@@ -558,7 +558,7 @@ async function confirmPendingAttendance(db, user) {
   }
   const result = await transaction(db, async () => {
     const session = (await db.query(`SELECT * FROM course_sessions
-      WHERE id=? AND group_id=? AND date=? AND cancelled=0 FOR UPDATE`,
+      WHERE id=? AND group_id=? AND date=? AND cancelled=0`,
     [payload.session_id, payload.group_id, payload.date])).rows[0];
     if (!session || session.title !== payload.session_title) {
       throw Object.assign(new Error('تغيرت بيانات المحاضرة؛ لم يتم تسجيل الحضور.'), { status: 409 });
@@ -568,7 +568,7 @@ async function confirmPendingAttendance(db, user) {
       WHERE e.group_id=? AND e.starts_on<=? AND (e.ends_on IS NULL OR e.ends_on>?)
         AND s.active=1 AND s.cancelled_at IS NULL
         AND NOT EXISTS(SELECT 1 FROM attendance a WHERE a.student_id=s.id AND a.session_id=?)
-      ORDER BY s.id FOR UPDATE OF s`,
+      ORDER BY s.id`,
     [payload.group_id, payload.date, payload.date, payload.session_id])).rows;
     const selectedIds = new Set(payload.student_ids.map(Number));
     const selectedStudents = students.filter(student => selectedIds.has(Number(student.id)));
@@ -793,15 +793,17 @@ export function registerAiAssistantRoutes(app, db) {
       const intent = detectIntent(message);
       console.info('AI chat intent:', { role: user.role, intent: intent.intent });
       const response = await buildResponse(message.trim(), user, db, history);
-      const saved = await db.query(`INSERT INTO ai_chat_messages
+      const createdAt = new Date().toISOString();
+      const inserted = await db.query(`INSERT INTO ai_chat_messages
         (user_id,user_name,user_role,message,response,created_at)
-        VALUES(?,?,?,?,?,?) RETURNING id,created_at`,
-      [user.id, user.name, user.role, message.trim(), response, new Date().toISOString()]);
+        VALUES(?,?,?,?,?,?)`,
+      [user.id, user.name, user.role, message.trim(), response, createdAt]);
+      const id = inserted.lastInsertRowid;
       res.json({
-        id: saved.rows[0].id,
+        id,
         message: message.trim(),
         response,
-        created_at: saved.rows[0].created_at
+        created_at: createdAt
       });
     } catch (error) {
       console.error('AI chat request failed:', { status: error.status || 500, error: error.name });

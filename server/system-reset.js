@@ -7,7 +7,7 @@ import { passwordValid, transaction } from './db.js';
 
 export const SYSTEM_DATA_LOCK_ID = 1414743888;
 const BUCKET = 'stc-course-library';
-const PRESERVED_TABLES = new Set(['neon_data_migrations', 'schema_migrations', 'system_wipe_requests', 'users']);
+const PRESERVED_TABLES = new Set(['neon_data_migrations', 'schema_migrations', 'system_wipe_requests', 'users', 'sqlite_sequence']);
 const quoteIdentifier = value => `"${value.replaceAll('"', '""')}"`;
 
 class SystemResetError extends Error {
@@ -28,23 +28,7 @@ async function recoverStaleRequest(db) {
 }
 
 export async function withSystemDataLock(db, callback) {
-  const client = await db.pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock($1)', [SYSTEM_DATA_LOCK_ID]);
-    const result = await callback();
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    try {
-      await client.query('ROLLBACK');
-    } catch (rollbackError) {
-      console.error('Failed to release the system-data transaction lock:', rollbackError);
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
+  return callback();
 }
 
 function createStorageClient() {
@@ -102,11 +86,10 @@ export async function removeAutomaticBackups({
 }
 
 async function truncateApplicationData(db) {
-  const result = await db.query(`SELECT table_name FROM information_schema.tables
-    WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name`);
-  const tables = result.rows.map(row => row.table_name).filter(name => !PRESERVED_TABLES.has(name));
-  if (tables.length) {
-    await db.query(`TRUNCATE TABLE ${tables.map(quoteIdentifier).join(', ')} RESTART IDENTITY CASCADE`);
+  const result = await db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`);
+  const tables = result.rows.map(row => row.name).filter(name => !PRESERVED_TABLES.has(name));
+  for (const table of tables) {
+    await db.query(`DELETE FROM ${quoteIdentifier(table)}`);
   }
   await db.query(`DELETE FROM users WHERE role='student'`);
 }
@@ -166,7 +149,7 @@ export function registerSystemResetRoutes(app, db, {
       }));
       res.status(201).json({ id: requestId });
     } catch (error) {
-      if (error.code === '23505') return res.status(409).json({ error: 'يوجد طلب مسح قائم بالفعل؛ راجعه قبل إرسال طلب آخر' });
+      if (error.code === 'SQLITE_CONSTRAINT' || error.message?.includes('UNIQUE')) return res.status(409).json({ error: 'يوجد طلب مسح قائم بالفعل؛ راجعه قبل إرسال طلب آخر' });
       next(error);
     }
   });
@@ -191,7 +174,7 @@ export function registerSystemResetRoutes(app, db, {
         const approvedAt = timestamp();
         const result = await transaction(db, async () => {
           const pending = (await db.query(`SELECT * FROM system_wipe_requests
-            WHERE id=? AND status='pending' FOR UPDATE`, [req.params.id])).rows[0];
+            WHERE id=? AND status='pending'`, [req.params.id])).rows[0];
           if (!pending) fail(409, 'الطلب غير موجود أو تمت معالجته بالفعل');
           if (pending.requester_id === req.user.id) fail(403, 'لا يمكن للدكتور الموافقة على طلب المسح الذي أرسله بنفسه');
           const approver = (await db.query(`SELECT id,name,username,role,active FROM users WHERE id=?`, [req.user.id])).rows[0];

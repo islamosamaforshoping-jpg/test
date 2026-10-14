@@ -24,7 +24,7 @@ function setup(options = {}) {
   ]);
   const requests = new Map();
   const storageCalls = [];
-  let truncateSql = '';
+  const deletedTables = [];
   let studentUsersDeleteSql = '';
   let backupCleanupCount = 0;
   let completionCount = 0;
@@ -45,7 +45,7 @@ function setup(options = {}) {
         requests.set(params[0], { ...pending(), id: params[0], requester_id: params[1], requester_name: params[2], requester_username: params[3], requester_role: params[4], created_at: params[5] });
         return { rows: [], changes: 1 };
       }
-      if (sql.includes('FROM system_wipe_requests') && sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM system_wipe_requests') && sql.includes("WHERE id=? AND status='pending'")) {
         const request = requests.get(params[0]);
         return { rows: request?.status === 'pending' ? [{ ...request }] : [] };
       }
@@ -76,11 +76,11 @@ function setup(options = {}) {
         return { rows: [], changes: 0 };
       }
       if (sql.includes('FROM system_wipe_requests ORDER BY created_at')) return { rows: [...requests.values()].map(row => ({ ...row })) };
-      if (sql.includes('FROM information_schema.tables')) {
-        return { rows: ['users', 'students', 'course_settings', 'system_wipe_requests', 'schema_migrations', 'neon_data_migrations'].map(table_name => ({ table_name })) };
+      if (sql.includes('FROM sqlite_master')) {
+        return { rows: ['users', 'students', 'course_settings', 'system_wipe_requests', 'schema_migrations', 'neon_data_migrations'].map(name => ({ name })) };
       }
-      if (sql.startsWith('TRUNCATE TABLE')) {
-        truncateSql = sql;
+      if (sql.startsWith('DELETE FROM "')) {
+        deletedTables.push(sql);
         return { rows: [] };
       }
       if (sql === "DELETE FROM users WHERE role='student'") {
@@ -111,9 +111,8 @@ function setup(options = {}) {
     onComplete: options.onComplete ?? (() => { completionCount++; })
   });
   return {
-    password, requests, routes, storageCalls,
+    password, requests, routes, storageCalls, deletedTables,
     get users() { return [...users.values()]; },
-    get truncateSql() { return truncateSql; },
     get studentUsersDeleteSql() { return studentUsersDeleteSql; },
     get backupCleanupCount() { return backupCleanupCount; },
     get completionCount() { return completionCount; }
@@ -187,11 +186,10 @@ test('a different doctor approval deletes storage, backs up, and all application
   assert.equal(result.response.statusCode, 200);
   assert.equal(result.response.payload.ok, true);
   assert.equal(state.requests.get('wipe-request').status, 'completed');
-  assert.doesNotMatch(state.truncateSql, /"users"/);
-  assert.match(state.truncateSql, /"students"/);
-  assert.match(state.truncateSql, /RESTART IDENTITY CASCADE$/);
-  assert.doesNotMatch(state.truncateSql, /"system_wipe_requests"/);
-  assert.doesNotMatch(state.truncateSql, /"schema_migrations"/);
+  assert.ok(state.deletedTables.includes('DELETE FROM "students"'));
+  assert.ok(!state.deletedTables.includes('DELETE FROM "users"'));
+  assert.ok(!state.deletedTables.includes('DELETE FROM "system_wipe_requests"'));
+  assert.ok(!state.deletedTables.includes('DELETE FROM "schema_migrations"'));
   assert.equal(state.studentUsersDeleteSql, "DELETE FROM users WHERE role='student'");
   assert.deepEqual(state.users.map(({ username, role }) => ({ username, role })), [
     { username: 'assistant', role: 'assistant' },
@@ -215,7 +213,7 @@ test('storage configuration errors return a clear failure without truncating app
     user: { id: 20, role: 'doctor', name: 'Doctor' }, params: { id: 'wipe-request' }
   });
   assert.equal(result.error.status, 503);
-  assert.equal(state.truncateSql, '');
+  assert.equal(state.deletedTables.length, 0);
   assert.equal(state.requests.get('wipe-request').status, 'failed');
   assert.match(state.requests.get('wipe-request').failure_reason, /تخزين المكتبة غير مهيأ/);
 });

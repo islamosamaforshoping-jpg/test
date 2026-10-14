@@ -19,13 +19,6 @@ const tables = [
   'exam_certificates',
   'course_materials', 'system_wipe_requests'
 ];
-const identityTables = new Set([
-  'courses', 'levels', 'groups_table', 'users', 'students', 'enrollments',
-  'course_sessions', 'attendance', 'payments', 'audit_logs', 'notifications',
-  'course_settings', 'subjects', 'course_lectures', 'exams', 'exam_questions',
-  'exam_attempts', 'exam_attempt_questions', 'exam_answers', 'exam_integrity_events',
-  'certificates', 'exam_certificates', 'course_materials'
-]);
 const doctorUsernames = new Set(['rashad', 'elnashar', 'elalfy']);
 const quoteIdentifier = value => `"${value.replaceAll('"', '""')}"`;
 
@@ -96,18 +89,17 @@ export async function restoreDatabaseBackup(db, buffer, actor) {
     await transaction(db, async () => {
       const columnsByTable = new Map();
       for (const table of tables) {
-        const { rows } = await db.query(
-          `SELECT column_name FROM information_schema.columns
-           WHERE table_schema='public' AND table_name=? ORDER BY ordinal_position`, [table]
-        );
-        columnsByTable.set(table, rows.map(row => row.column_name));
+        const { rows } = await db.query(`PRAGMA table_info(${quoteIdentifier(table)})`);
+        columnsByTable.set(table, rows.map(row => row.name));
       }
 
       const allColumns = columnsByTable.get('users');
       if (!allColumns || !allColumns.includes('username')) {
         throw new DatabaseBackupError('مخطط قاعدة البيانات غير متوافق مع ملف النسخة.');
       }
-      await db.query(`TRUNCATE TABLE ${tables.map(quoteIdentifier).join(', ')} RESTART IDENTITY CASCADE`);
+      for (const table of tables) {
+        await db.query(`DELETE FROM ${quoteIdentifier(table)}`);
+      }
 
       for (const table of tables) {
         const columns = columnsByTable.get(table);
@@ -118,7 +110,7 @@ export async function restoreDatabaseBackup(db, buffer, actor) {
           }
           const names = Object.keys(row);
           if (!names.length) continue;
-          const placeholders = names.map((_, index) => `$${index + 1}`).join(', ');
+          const placeholders = names.map(() => `?`).join(', ');
           await db.query(
             `INSERT INTO ${quoteIdentifier(table)} (${names.map(quoteIdentifier).join(', ')})
              VALUES (${placeholders})`,
@@ -127,27 +119,13 @@ export async function restoreDatabaseBackup(db, buffer, actor) {
         }
       }
 
-      for (const table of tables) {
-        if (!identityTables.has(table)) continue;
-        const sequence = await db.query(
-          `SELECT pg_get_serial_sequence(?, 'id') AS sequence`, [`public.${table}`]
-        );
-        if (sequence.rows[0]?.sequence) {
-          await db.query(
-            `SELECT setval(pg_get_serial_sequence(?, 'id'),
-              COALESCE((SELECT MAX(id) FROM ${quoteIdentifier(table)}), 1),
-              EXISTS(SELECT 1 FROM ${quoteIdentifier(table)}))`,
-            [`public.${table}`]
-          );
-        }
-      }
       await db.query('DELETE FROM auth_sessions');
       await audit(db, restoredActor, 'استعادة نسخة احتياطية', 'database', null,
         { restored_at: new Date().toISOString() });
     });
   } catch (error) {
     if (error instanceof DatabaseBackupError) throw error;
-    console.error('PostgreSQL backup restore failed:', error);
+    console.error('Database backup restore failed:', error);
     throw new DatabaseBackupError('فشل التحقق من النسخة أو استعادتها؛ لم يتم اعتماد أي تغيير.');
   }
 }
