@@ -45,7 +45,7 @@ function setup(options = {}) {
         requests.set(params[0], { ...pending(), id: params[0], requester_id: params[1], requester_name: params[2], requester_username: params[3], requester_role: params[4], created_at: params[5] });
         return { rows: [], changes: 1 };
       }
-      if (sql.includes('FROM system_wipe_requests') && sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM system_wipe_requests') && sql.includes("status='pending'")) {
         const request = requests.get(params[0]);
         return { rows: request?.status === 'pending' ? [{ ...request }] : [] };
       }
@@ -76,17 +76,17 @@ function setup(options = {}) {
         return { rows: [], changes: 0 };
       }
       if (sql.includes('FROM system_wipe_requests ORDER BY created_at')) return { rows: [...requests.values()].map(row => ({ ...row })) };
-      if (sql.includes('FROM information_schema.tables')) {
+      if (sql.includes('FROM sqlite_master')) {
         return { rows: ['users', 'students', 'course_settings', 'system_wipe_requests', 'schema_migrations', 'neon_data_migrations'].map(table_name => ({ table_name })) };
       }
-      if (sql.startsWith('TRUNCATE TABLE')) {
-        truncateSql = sql;
-        return { rows: [] };
-      }
-      if (sql === "DELETE FROM users WHERE role='student'") {
-        studentUsersDeleteSql = sql;
+      if (sql.includes("DELETE FROM users WHERE role='student'")) {
+        studentUsersDeleteSql = "DELETE FROM users WHERE role='student'";
         for (const [id, user] of users) if (user.role === 'student') users.delete(id);
         return { rows: [], changes: 0 };
+      }
+      if (sql.startsWith('DELETE FROM')) {
+        truncateSql += sql + '; ';
+        return { rows: [] };
       }
       throw new Error(`Unexpected query in test: ${sql}`);
     }
@@ -189,7 +189,6 @@ test('a different doctor approval deletes storage, backs up, and all application
   assert.equal(state.requests.get('wipe-request').status, 'completed');
   assert.doesNotMatch(state.truncateSql, /"users"/);
   assert.match(state.truncateSql, /"students"/);
-  assert.match(state.truncateSql, /RESTART IDENTITY CASCADE$/);
   assert.doesNotMatch(state.truncateSql, /"system_wipe_requests"/);
   assert.doesNotMatch(state.truncateSql, /"schema_migrations"/);
   assert.equal(state.studentUsersDeleteSql, "DELETE FROM users WHERE role='student'");

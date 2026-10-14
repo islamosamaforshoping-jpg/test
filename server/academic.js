@@ -56,7 +56,7 @@ let libraryS3Client;
 const libraryStorage = () => {
   const { AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL_S3, AWS_REGION } = process.env;
   if (!AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY || !AWS_ENDPOINT_URL_S3 || !AWS_REGION) {
-    fail(503, 'مكتبة المحاضرات غير مهيأة على الخادم؛ يرجى ضبط إعدادات تخزين Neon.');
+    fail(503, 'مكتبة المحاضرات غير مهيأة على الخادم؛ يرجى ضبط إعدادات التخزين.');
   }
   if (!libraryS3Client) {
     libraryS3Client = new S3Client({
@@ -150,7 +150,7 @@ export function registerAcademicRoutes(app, db) {
   };
   const enrolledStudentsNotice = async (doctor, groupId, day, title, message, metadata) => await (await db.query(`
     INSERT INTO notifications(student_id,title,message,type,created_by,metadata)
-    SELECT DISTINCT s.id,?,?,'GENERAL',?::INTEGER,? FROM students s JOIN enrollments en ON en.student_id=s.id
+    SELECT DISTINCT s.id,?,?,'GENERAL',?,? FROM students s JOIN enrollments en ON en.student_id=s.id
     WHERE s.active=1 AND s.cancelled_at IS NULL AND en.group_id=?
       AND en.starts_on<=? AND (en.ends_on IS NULL OR en.ends_on>?)
   `, [title, message, doctor.id, JSON.stringify(metadata), groupId, day, day])).changes;
@@ -455,7 +455,7 @@ export function registerAcademicRoutes(app, db) {
     const levelId = req.body.level_id === undefined ? subject.level_id : integer(req.body.level_id);
     if (!await (await db.query('SELECT id FROM levels WHERE id=?', [levelId])).rows[0]) fail(400, 'الفرقة غير موجودة');
     if (levelId !== subject.level_id && await (await db.query('SELECT id FROM course_lectures WHERE subject_id=? LIMIT 1', [subject.id])).rows[0]) fail(409, 'لا يمكن تغيير فرقة مادة لها محاضرات');
-    await db.query(`UPDATE subjects SET name=?,level_id=?,updated_at=to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') WHERE id=? AND doctor_id=?`, [name, levelId, subject.id, req.user.id]);
+    await db.query(`UPDATE subjects SET name=?,level_id=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND doctor_id=?`, [name, levelId, subject.id, req.user.id]);
     await audit(db, req.user, 'تعديل مادة', 'subject', subject.id, { before: subject.name, after: name, level_id: levelId });
     res.json({ ok: true });
   });
@@ -478,7 +478,7 @@ export function registerAcademicRoutes(app, db) {
     }
     if (req.query.q) {
       const query = text(req.query.q, 'البحث', 1, 100).replace(/[!%_]/g, '!$&');
-      clauses.push(`(cl.title ILIKE ? ESCAPE '!' OR cl.topic ILIKE ? ESCAPE '!' OR s.name ILIKE ? ESCAPE '!')`);
+      clauses.push(`(cl.title LIKE ? ESCAPE '!' OR cl.topic LIKE ? ESCAPE '!' OR s.name LIKE ? ESCAPE '!')`);
       args.push(`%${query}%`, `%${query}%`, `%${query}%`);
     }
     const where = `WHERE ${clauses.join(' AND ')}`;
@@ -539,7 +539,7 @@ export function registerAcademicRoutes(app, db) {
     const page=Math.max(1,integer(req.query.page||1)),size=Math.min(100,Math.max(1,integer(req.query.size||20)));
     const clauses=['e.doctor_id=?'],args=[req.user.id];
     if(req.query.status){ if(!['draft','published','closed'].includes(req.query.status)) fail(400,'حالة الاختبار غير صحيحة'); clauses.push('e.status=?'); args.push(req.query.status); }
-    if(req.query.q){ const q=text(req.query.q,'البحث',1,100).replace(/[!%_]/g,'!$&'); clauses.push("(e.title ILIKE ? ESCAPE '!' OR s.name ILIKE ? ESCAPE '!' OR cl.title ILIKE ? ESCAPE '!')"); args.push(`%${q}%`,`%${q}%`,`%${q}%`); }
+    if(req.query.q){ const q=text(req.query.q,'البحث',1,100).replace(/[!%_]/g,'!$&'); clauses.push("(e.title LIKE ? ESCAPE '!' OR s.name LIKE ? ESCAPE '!' OR cl.title LIKE ? ESCAPE '!')"); args.push(`%${q}%`,`%${q}%`,`%${q}%`); }
     const where=`WHERE ${clauses.join(' AND ')}`;
     const items=await (await db.query(`SELECT e.*,s.name subject_name,cl.title lecture_title,l.name level_name,
       (SELECT COUNT(*) FROM exam_questions q WHERE q.exam_id=e.id) question_pool_size,
@@ -579,7 +579,7 @@ export function registerAcademicRoutes(app, db) {
     if(duration>600||count>500||!['draft','published','closed'].includes(status)) fail(400,'إعدادات الاختبار غير صحيحة');
     if(exam.status!=='draft'&&(title!==exam.title||description!==exam.description||duration!==exam.duration_minutes||count!==exam.question_count)) fail(409,'أغلق الاختبار ثم أنشئ اختبارًا جديدًا لتغيير أسئلته أو مدته');
     if(status==='published'&&await (await db.query('SELECT COUNT(*) count FROM exam_questions WHERE exam_id=?', [exam.id])).rows[0].count<count) fail(409,'عدد الأسئلة في المخزون أقل من عدد الأسئلة المطلوبة');
-    await db.query(`UPDATE exams SET title=?,description=?,duration_minutes=?,question_count=?,status=?,updated_at=to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') WHERE id=? AND doctor_id=?`, [title, description, duration, count, status, exam.id, req.user.id]);
+    await db.query(`UPDATE exams SET title=?,description=?,duration_minutes=?,question_count=?,status=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND doctor_id=?`, [title, description, duration, count, status, exam.id, req.user.id]);
     await audit(db,req.user,status!==exam.status?`تغيير حالة الاختبار إلى ${status}`:'تعديل إعدادات اختبار','exam',exam.id,{title,status,duration_minutes:duration,question_count:count});
     if(status==='published'&&exam.status!=='published'){
       const lecture=await lectureOwned(exam.lecture_id,req.user.id);
@@ -639,7 +639,7 @@ export function registerAcademicRoutes(app, db) {
       if(question.question_type!=='true_false'||!['true','false'].includes(String(req.body.correct_answer))) fail(400,'الإجابة الصحيحة غير صالحة');
       correct=String(req.body.correct_answer);
     }
-    await db.query(`UPDATE exam_questions SET question_text=?,options_json=?,correct_answer=?,updated_at=to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') WHERE id=?`, [questionText, JSON.stringify(options), correct, question.id]);
+    await db.query(`UPDATE exam_questions SET question_text=?,options_json=?,correct_answer=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, [questionText, JSON.stringify(options), correct, question.id]);
     res.json({ok:true});
   });
 
@@ -667,7 +667,7 @@ export function registerAcademicRoutes(app, db) {
     const clauses=['s.level_id=?','s.active=1','s.cancelled_at IS NULL',`EXISTS(SELECT 1 FROM enrollments en WHERE en.student_id=s.id AND en.group_id=? AND en.starts_on<=? AND (en.ends_on IS NULL OR en.ends_on>?))`];
     const args=[exam.level_id,lecture.group_id,lecture.lecture_date,lecture.lecture_date];
     if(req.query.group_id&&integer(req.query.group_id)!==lecture.group_id) fail(400,'المجموعة لا تتبع هذا الاختبار');
-    if(req.query.q){const q=text(req.query.q,'البحث',1,100).replace(/[!%_]/g,'!$&');clauses.push("(s.name ILIKE ? ESCAPE '!' OR s.code ILIKE ? ESCAPE '!')");args.push(`%${q}%`,`%${q}%`);}
+    if(req.query.q){const q=text(req.query.q,'البحث',1,100).replace(/[!%_]/g,'!$&');clauses.push("(s.name LIKE ? ESCAPE '!' OR s.code LIKE ? ESCAPE '!')");args.push(`%${q}%`,`%${q}%`);}
     const base=clauses.join(' AND '),tab=req.query.tab==='missing'?'missing':'attempted';
     if(req.query.status&&tab==='attempted'){
       if(!['in_progress','submitted','timed_out'].includes(req.query.status)) fail(400,'حالة المحاولة غير صحيحة');
@@ -705,7 +705,7 @@ export function registerAcademicRoutes(app, db) {
     const result=await transaction(db,async()=>{
       const attempt=await (await db.query(`SELECT a.*,s.name student_name
         FROM exam_attempts a JOIN students s ON s.id=a.student_id
-        WHERE a.id=? AND a.exam_id=? FOR UPDATE`,[attemptId,exam.id])).rows[0];
+        WHERE a.id=? AND a.exam_id=?`,[attemptId,exam.id])).rows[0];
       if(!attempt) fail(404,'محاولة الاختبار غير موجودة');
       if(!['submitted','timed_out'].includes(attempt.status)) fail(409,'لا يمكن إصدار شهادة قبل إكمال الاختبار');
       let certificate=await (await db.query('SELECT * FROM exam_certificates WHERE attempt_id=?',[attempt.id])).rows[0];
@@ -863,7 +863,7 @@ export function registerAcademicRoutes(app, db) {
     }));
     await transaction(db, async () => {
       const save = `INSERT INTO exam_answers(attempt_id,question_id,selected_answer,is_correct,answered_at)
-        VALUES(?,?,?,0,to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+        VALUES(?,?,?,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         ON CONFLICT(attempt_id,question_id) DO UPDATE SET selected_answer=excluded.selected_answer,is_correct=0,answered_at=excluded.answered_at`;
       for (const answer of validated) {
         await db.query(save, [attempt.id, answer.questionId, answer.selected]);
@@ -958,7 +958,7 @@ export function registerAcademicRoutes(app, db) {
         WHERE e.lecture_id=? LIMIT 1`, [old.id])).rows[0]) fail(409,'بدأ طلاب هذا الاختبار؛ لا يمكن تغيير موعد المحاضرة أو إلغاؤها');
       if (scheduleChanged && await (await db.query('SELECT id FROM course_sessions WHERE group_id=? AND date=? AND id<>?', [groupId, lectureDate, old.course_session_id])).rows[0]) fail(409,'توجد جلسة أخرى لهذه المجموعة في التاريخ المحدد');
       await db.query(`UPDATE course_sessions SET group_id=?,date=?,title=?,start_time=?,end_time=?,starts_at_utc=?,cancelled=?,reminder_sent_at=NULL WHERE id=?`, [groupId, lectureDate, title, startTime, endTime, sessionStartsAtUtc(lectureDate,startTime), status==='cancelled'?1:0, old.course_session_id]);
-      await db.query(`UPDATE course_lectures SET group_id=?,title=?,topic=?,lecture_date=?,start_time=?,end_time=?,status=?,updated_at=to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') WHERE id=? AND doctor_id=?`, [groupId, title, topic, lectureDate, startTime, endTime, status, old.id, req.user.id]);
+      await db.query(`UPDATE course_lectures SET group_id=?,title=?,topic=?,lecture_date=?,start_time=?,end_time=?,status=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND doctor_id=?`, [groupId, title, topic, lectureDate, startTime, endTime, status, old.id, req.user.id]);
       const changed = scheduleChanged || status !== old.status || title !== old.title;
       if (changed) await enrolledStudentsNotice(req.user,status==='cancelled'?old.group_id:groupId,status==='cancelled'?old.lecture_date:lectureDate,
         status==='cancelled'?'إلغاء محاضرة':'تحديث موعد محاضرة',
