@@ -54,7 +54,7 @@ export async function dailyOperationsReport(db, { date, levelId = null, groupId 
     JOIN groups_table g ON g.id=s.group_id
     JOIN users u ON u.id=p.recorded_by
     WHERE p.voided_at IS NULL
-      AND (p.created_at::timestamptz AT TIME ZONE 'Africa/Cairo')::date=?${paymentFilterSql}
+      AND date(p.created_at)=?${paymentFilterSql}
     ORDER BY p.created_at,p.id`, paymentParams)).rows;
 
   const present = attendanceRows.filter(row => row.attendance_id).length;

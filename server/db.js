@@ -1,8 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import pg from 'pg';
-
-const { Pool } = pg;
+import { createClient } from '@libsql/client';
 
 const transactionContext = new AsyncLocalStorage();
 
@@ -34,90 +32,77 @@ export function today() {
   }).format(new Date());
 }
 
-function postgresPlaceholders(statement) {
-  let index = 0;
-  let quote = null;
-  let result = '';
-  for (let position = 0; position < statement.length; position++) {
-    const character = statement[position];
-    if (quote) {
-      result += character;
-      if (character === quote) {
-        if (statement[position + 1] === quote) result += statement[++position];
-        else quote = null;
-      }
-    } else if (character === "'" || character === '"') {
-      quote = character;
-      result += character;
-    } else if (character === '?') {
-      result += `$${++index}`;
-    } else {
-      result += character;
-    }
-  }
-  return result;
-}
-
-function postgresStatement(statement) {
-  let sql = statement;
-  const ignoredConflict = /^\s*INSERT\s+OR\s+IGNORE\s+INTO\b/i.test(sql);
-  sql = sql.replace(/^(\s*)INSERT\s+OR\s+IGNORE\s+INTO\b/i, '$1INSERT INTO');
-  const isInsert = /^\s*INSERT\s+INTO\b/i.test(sql);
-  const insertMatch = sql.match(/^\s*INSERT\s+INTO\s+(?:"([^"]+)"|([a-z_][a-z\d_]*))/i);
-  const insertTable = (insertMatch?.[1] || insertMatch?.[2])?.toLowerCase();
-  const hasIdPrimaryKey = !['auth_sessions', 'level_course_prices', 'schema_migrations'].includes(insertTable);
-  const hasReturning = /\bRETURNING\b/i.test(sql);
-  const hasConflictClause = /\bON\s+CONFLICT\b/i.test(sql);
-  if (ignoredConflict && !hasConflictClause) sql = `${sql.trimEnd()} ON CONFLICT DO NOTHING`;
-  if (isInsert && hasIdPrimaryKey && !hasReturning) sql = `${sql.trimEnd()} RETURNING id`;
-  return postgresPlaceholders(sql);
-}
-
 export function openDatabase() {
-  const connectionString = process.env.DATABASE_URL_LOCAL || process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL_LOCAL or DATABASE_URL is required to connect to Postgres.');
-  const pool = new Pool({ connectionString });
+  const url = process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL_LOCAL || process.env.DATABASE_URL || 'file:data/course.sqlite';
+  const authToken = process.env.TURSO_AUTH_TOKEN;
+
+  const client = createClient({
+    url,
+    ...(authToken ? { authToken } : {})
+  });
+
   return {
-    pool,
+    client,
     async query(statement, parameters = []) {
-      const client = transactionContext.getStore();
-      const result = await (client || pool).query(postgresStatement(statement), parameters);
-      const numericTypes = new Set([20, 21, 23, 700, 701, 1700]);
-      const numericColumns = result.fields
-        .map((field, index) => numericTypes.has(field.dataTypeID) ? index : -1)
-        .filter(index => index >= 0);
-      for (const row of result.rows) {
-        for (const index of numericColumns) {
-          if (typeof row[result.fields[index].name] === 'string') {
-            row[result.fields[index].name] = Number(row[result.fields[index].name]);
-          }
-        }
-      }
+      const activeTx = transactionContext.getStore();
+      const executor = activeTx || client;
+      const resultSet = await executor.execute({ sql: statement, args: parameters });
+      const rows = resultSet.rows || [];
+      const changes = resultSet.rowsAffected || 0;
+      const lastInsertRowid = resultSet.lastInsertRowid !== undefined && resultSet.lastInsertRowid !== null
+        ? Number(resultSet.lastInsertRowid)
+        : undefined;
+
       return {
-        ...result,
-        changes: result.rowCount,
-        lastInsertRowid: result.rows?.[0]?.id
+        rows,
+        rowCount: rows.length,
+        changes,
+        lastInsertRowid
       };
     },
-    close: () => pool.end()
+    close: () => client.close()
   };
 }
 
 export async function transaction(db, callback) {
-  const activeClient = transactionContext.getStore();
-  if (activeClient) return callback(activeClient);
+  const activeTx = transactionContext.getStore();
+  if (activeTx) return callback(activeTx);
 
-  const client = await db.pool.connect();
+  if (!db?.client) {
+    return callback(db);
+  }
+
+  const tx = await db.client.transaction('write');
   try {
-    await client.query('BEGIN');
-    const result = await transactionContext.run(client, callback);
-    await client.query('COMMIT');
+    const txProxy = {
+      async execute(stmt) { return tx.execute(stmt); },
+      async query(statement, parameters = []) {
+        const resultSet = await tx.execute({ sql: statement, args: parameters });
+        const rows = resultSet.rows || [];
+        const changes = resultSet.rowsAffected || 0;
+        const lastInsertRowid = resultSet.lastInsertRowid !== undefined && resultSet.lastInsertRowid !== null
+          ? Number(resultSet.lastInsertRowid)
+          : undefined;
+        return {
+          rows,
+          rowCount: rows.length,
+          changes,
+          lastInsertRowid
+        };
+      }
+    };
+    const result = await transactionContext.run(txProxy, () => callback(txProxy));
+    await tx.commit();
     return result;
   } catch (error) {
-    await client.query('ROLLBACK');
+    try {
+      await tx.rollback();
+    } catch {
+      // ignore rollback failure if transaction already failed
+    }
     throw error;
   } finally {
-    client.release();
+    tx.close();
   }
 }
 

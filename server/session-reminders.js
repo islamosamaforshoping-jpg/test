@@ -56,7 +56,7 @@ export async function deliverDueSessionReminders(db, now = Date.now()) {
       WHERE cs.cancelled=0 AND cs.reminder_sent_at IS NULL
         AND cs.starts_at_utc>? AND cs.starts_at_utc<=? ORDER BY cs.starts_at_utc,cs.id`, [nowIso, cutoffIso]);
     const notify = `INSERT INTO notifications(student_id,title,message,type,created_by,metadata)
-      SELECT DISTINCT s.id,? ,?,'GENERAL',?::INTEGER,?
+      SELECT DISTINCT s.id,? ,?,'GENERAL',?,?
       FROM students s JOIN enrollments e ON e.student_id=s.id
       WHERE s.active=1 AND s.cancelled_at IS NULL AND e.group_id=?
         AND e.starts_on<=? AND (e.ends_on IS NULL OR e.ends_on>?)`;
