@@ -1,54 +1,63 @@
 import dotenv from 'dotenv';
-import pg from 'pg';
+import { createClient } from '@libsql/client';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 dotenv.config({ path: resolve(process.cwd(), '.env.local') });
 
-const connectionString = process.env.DATABASE_URL_UNPOOLED ||
-  process.env.DATABASE_URL || process.env.DATABASE_URL_LOCAL;
-if (!connectionString) {
-  throw new Error('Set DATABASE_URL_UNPOOLED, DATABASE_URL, or DATABASE_URL_LOCAL in .env.local before upgrading.');
+const url = process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL_LOCAL || process.env.DATABASE_URL;
+const authToken = process.env.TURSO_AUTH_TOKEN;
+
+if (!url) {
+  throw new Error('Set TURSO_DATABASE_URL, DATABASE_URL_LOCAL, or DATABASE_URL in .env.local before upgrading.');
 }
 
-const pool = new pg.Pool({ connectionString });
+const client = createClient({ url, authToken });
 const migrations = new Map([
   [13, 'ai_chat'],
   [14, 'ai_pending_actions']
 ]);
 
 try {
-  const client = await pool.connect();
+  const tx = await client.transaction('write');
   try {
-    await client.query('BEGIN');
-    await client.query('LOCK TABLE schema_migrations IN EXCLUSIVE MODE');
     const applied = [];
     for (const [version, name] of migrations) {
-      const existing = await client.query(
-        'SELECT version FROM schema_migrations WHERE version=$1',
-        [version]
-      );
-      if (existing.rowCount) continue;
+      const existing = await tx.execute({
+        sql: 'SELECT version FROM schema_migrations WHERE version=?',
+        args: [version]
+      });
+      if (existing.rows.length) continue;
       const migration = await readFile(
         resolve(process.cwd(), 'migrations', `${String(version).padStart(4, '0')}_${name}.sql`),
         'utf8'
       );
-      await client.query(migration
+      const cleaned = migration
         .replace(/^\s*BEGIN\s*;\s*/i, '')
-        .replace(/\s*COMMIT\s*;\s*$/i, ''));
-      await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [version]);
+        .replace(/\s*COMMIT\s*;\s*$/i, '')
+        .replace(/to_char\(clock_timestamp\(\) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS\.MS"Z"'\)/g, "strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+
+      // Split multiple SQL statements by semicolon if needed
+      const statements = cleaned.split(';').map(s => s.trim()).filter(Boolean);
+      for (const sql of statements) {
+        await tx.execute(sql);
+      }
+      await tx.execute({
+        sql: 'INSERT INTO schema_migrations(version) VALUES(?)',
+        args: [version]
+      });
       applied.push(version);
     }
-    await client.query('COMMIT');
+    await tx.commit();
     console.log(applied.length
       ? `Applied database migration(s): ${applied.join(', ')}.`
       : 'AI chat database migrations are already applied.');
   } catch (error) {
-    await client.query('ROLLBACK');
+    await tx.rollback();
     throw error;
   } finally {
-    client.release();
+    tx.close();
   }
 } finally {
-  await pool.end();
+  client.close();
 }

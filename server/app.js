@@ -296,7 +296,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     if (!await (await db.query('SELECT id FROM levels WHERE id=?', [levelId])).rows[0]) fail(404, 'الفرقة غير موجودة');
     await transaction(db, async () => {
       const before = await (await db.query('SELECT price FROM level_course_prices WHERE level_id=?', [levelId])).rows[0]?.price ?? 0;
-      await db.query(`INSERT INTO level_course_prices(level_id,price,updated_by,updated_at) VALUES(?,?,?,to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+      await db.query(`INSERT INTO level_course_prices(level_id,price,updated_by,updated_at) VALUES(?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         ON CONFLICT(level_id) DO UPDATE SET price=excluded.price,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, [levelId, price, req.user.id]);
       await audit(db, req.user, 'تعديل سعر الفرقة', 'level', levelId, { before, after: price });
     });
@@ -312,7 +312,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     if (starts && ends && Date.parse(ends) <= Date.parse(starts)) fail(400, 'نهاية الحجز يجب أن تكون بعد بدايته');
     await transaction(db, async () => {
       await db.query(`INSERT INTO course_settings(id,booking_open,booking_starts_at,booking_ends_at,course_starts_at,updated_by,updated_at)
-        VALUES(1,?,?,?,?,?,to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+        VALUES(1,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         ON CONFLICT(id) DO UPDATE SET booking_open=excluded.booking_open,booking_starts_at=excluded.booking_starts_at,
         booking_ends_at=excluded.booking_ends_at,course_starts_at=excluded.course_starts_at,updated_by=excluded.updated_by,
         updated_at=excluded.updated_at`, [bookingOpen, starts, ends, courseStarts, req.user.id]);
@@ -346,7 +346,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     const notification = await transaction(db, async () => {
       const existing = await (await db.query('SELECT id,is_read FROM notifications WHERE id=? AND student_id=?', [id, student.id])).rows[0];
       if (!existing) fail(404, 'الإشعار غير موجود');
-      if (!existing.is_read) await db.query(`UPDATE notifications SET is_read=1,read_at=to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      if (!existing.is_read) await db.query(`UPDATE notifications SET is_read=1,read_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id=? AND student_id=? AND is_read=0`, [id, student.id]);
       return await (await db.query(`SELECT id,title,message,type,is_read,created_at,read_at FROM notifications WHERE id=? AND student_id=?`, [id, student.id])).rows[0];
     });
@@ -356,7 +356,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     if (req.user.role !== 'student') fail(403, 'قراءة الإشعارات متاحة للطالب فقط');
     fields(req.body, []);
     const student = await currentStudent(req.user.id);
-    const result = await db.query(`UPDATE notifications SET is_read=1,read_at=to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    const result = await db.query(`UPDATE notifications SET is_read=1,read_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE student_id=? AND is_read=0`, [student.id]);
     res.json({ updated: result.changes });
   });
@@ -454,7 +454,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
   const studentFilter = query => {
     const clauses = ['1=1'];
     const args = [];
-    if (query.q) { const q = text(query.q, 'البحث', 1, 100); clauses.push('(s.name ILIKE ? ESCAPE \'!\' OR s.code ILIKE ? ESCAPE \'!\')'); const v = `%${q.replace(/[!%_]/g, '!$&')}%`; args.push(v, v); }
+    if (query.q) { const q = text(query.q, 'البحث', 1, 100); clauses.push('(s.name LIKE ? ESCAPE \'!\' OR s.code LIKE ? ESCAPE \'!\')'); const v = `%${q.replace(/[!%_]/g, '!$&')}%`; args.push(v, v); }
     if (query.level_id) { clauses.push('s.level_id=?'); args.push(integer(query.level_id)); }
     if (query.group_id) { clauses.push('s.group_id=?'); args.push(integer(query.group_id)); }
     if (query.active !== 'all') { clauses.push('s.active=?'); args.push(query.active === '0' ? 0 : 1); }
@@ -494,8 +494,8 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
         AND e.starts_on<=cs.date AND (e.ends_on IS NULL OR e.ends_on>cs.date)
       LEFT JOIN attendance a ON a.session_id=cs.id AND a.student_id=e.student_id
       WHERE cs.cancelled=0 AND cs.date<=?
-    ),` : `session_totals AS (SELECT NULL::INTEGER student_id,0 total_sessions,0 present,NULL::TEXT last_attendance WHERE FALSE),
-      recent_sessions AS (SELECT NULL::INTEGER student_id,NULL::TEXT date,NULL::INTEGER attendance_id,0 position WHERE FALSE),`;
+    ),` : `session_totals AS (SELECT NULL student_id,0 total_sessions,0 present,NULL last_attendance WHERE 1=0),
+      recent_sessions AS (SELECT NULL student_id,NULL date,NULL attendance_id,0 position WHERE 1=0),`;
     const commonCtes = `WITH payment_totals AS (
         SELECT student_id,SUM(amount) paid FROM payments WHERE voided_at IS NULL GROUP BY student_id
       ), ${sessionCte}
@@ -507,7 +507,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
         SELECT s.id,s.user_id,s.course_id,s.code,s.name,s.phone,s.level_id,s.group_id,s.course_price_snapshot price,
           s.course_price_snapshot,s.enrolled_on,s.active,s.created_at,s.cancelled_at,
           l.name level_name,g.name group_name,u.username,COALESCE(p.paid,0) paid,
-          GREATEST(0,s.course_price_snapshot-COALESCE(p.paid,0)) remaining,
+          MAX(0,s.course_price_snapshot-COALESCE(p.paid,0)) remaining,
           COALESCE(st.total_sessions,0) total_sessions,COALESCE(st.present,0) present,
           COALESCE(st.total_sessions,0)-COALESCE(st.present,0) absent,
           CASE WHEN COALESCE(st.total_sessions,0)>0 THEN ROUND(100.0*COALESCE(st.present,0)/st.total_sessions) ELSE 0 END percentage,
@@ -524,9 +524,9 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
       ), categories AS (
         SELECT 'more_than_half' kind,b.* FROM base b WHERE b.price>0 AND b.remaining>b.price/2
         UNION ALL SELECT 'high_absence',b.* FROM base b
-          WHERE ${started ? `b.total_sessions>0 AND 100.0*b.absent/b.total_sessions>=${threshold}` : 'FALSE'}
+          WHERE ${started ? `b.total_sessions>0 AND 100.0*b.absent/b.total_sessions>=${threshold}` : '1=0'}
         UNION ALL SELECT 'missed_last_two',b.* FROM base b
-          WHERE ${started ? 'b.second_session_date IS NOT NULL AND b.last_session_attendance_id IS NULL AND b.second_session_attendance_id IS NULL' : 'FALSE'}
+          WHERE ${started ? 'b.second_session_date IS NOT NULL AND b.last_session_attendance_id IS NULL AND b.second_session_attendance_id IS NULL' : '1=0'}
         UNION ALL SELECT 'no_payment',b.* FROM base b WHERE b.paid=0
       )`;
     const bind = [...(started ? [today(), today()] : []), ...args];
@@ -704,9 +704,8 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     const params = [], clauses = [];
     if (req.query.group_id) { clauses.push('cs.group_id=?'); params.push(integer(req.query.group_id)); }
     if (req.query.date) { clauses.push('cs.date=?'); params.push(date(req.query.date)); }
-    const sessions = await (await db.query(`SELECT cs.*,g.name group_name,l.name level_name,u.name doctor_name,s.name subject_name FROM course_sessions cs
-      JOIN groups_table g ON g.id=cs.group_id JOIN levels l ON l.id=g.level_id
-      LEFT JOIN users u ON u.id=cs.doctor_id LEFT JOIN subjects s ON s.id=cs.subject_id
+    const sessions = await (await db.query(`SELECT cs.*,g.name group_name,l.name level_name,u.name doctor_name,sub.name subject_name FROM course_sessions cs
+      JOIN groups_table g ON g.id=cs.group_id JOIN levels l ON l.id=g.level_id LEFT JOIN subjects sub ON sub.id=cs.subject_id LEFT JOIN users u ON u.id=cs.doctor_id
       ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY cs.date DESC,cs.id DESC`, [...params])).rows;
     const currentTime = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
     res.json(sessions.map(session => {
@@ -731,7 +730,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
       const groupName = await (await db.query('SELECT name FROM groups_table WHERE id=?', [group])).rows[0].name;
       const message = `تم تحديد محاضرة ${title} في مادة ${academicDetails.subject_name} مع الدكتور ${academicDetails.doctor_name} لمجموعتك ${groupName} بتاريخ ${day}${startTime ? ` الساعة ${formatClockTime(startTime)}` : ''}${endTime ? ` حتى ${formatClockTime(endTime)}` : ''}.`;
       const notified = await db.query(`INSERT INTO notifications(student_id,title,message,type,created_by,metadata)
-        SELECT DISTINCT s.id,? ,?,'GENERAL',?::INTEGER,?
+        SELECT DISTINCT s.id,? ,?,'GENERAL',?,?
         FROM students s JOIN enrollments e ON e.student_id=s.id
         WHERE s.active=1 AND s.cancelled_at IS NULL AND e.group_id=?
           AND e.starts_on<=? AND (e.ends_on IS NULL OR e.ends_on>?)`, ['موعد محاضرة جديدة', message, req.user.id, JSON.stringify({ session_id: id, group_id: group, doctor_id: doctorId, subject_id: subjectId }), group, day, day]);
@@ -781,7 +780,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
           ? `تم إلغاء محاضرة ${old.title}${academicLabel} لمجموعتك بتاريخ ${old.date}.`
           : `تم تحديث موعد محاضرة ${title}${academicLabel} لمجموعتك بتاريخ ${day}${startTime ? ` الساعة ${formatClockTime(startTime)}` : ''}${endTime ? ` حتى ${formatClockTime(endTime)}` : ''}.`;
         const notified = await db.query(`INSERT INTO notifications(student_id,title,message,type,created_by,metadata)
-          SELECT DISTINCT s.id,?,?,'GENERAL',?::INTEGER,?
+          SELECT DISTINCT s.id,?,?,'GENERAL',?,?
           FROM students s JOIN enrollments e ON e.student_id=s.id
           WHERE s.active=1 AND s.cancelled_at IS NULL AND e.group_id=?
             AND e.starts_on<=? AND (e.ends_on IS NULL OR e.ends_on>?)`, [eventTitle, message, req.user.id, JSON.stringify({ session_id: id, group_id: recipientGroup, doctor_id: cancelled ? old.doctor_id : doctorId, subject_id: cancelled ? old.subject_id : subjectId }), recipientGroup, recipientDate, recipientDate]);
@@ -822,13 +821,12 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     const notifyRemaining = req.body.notify_remaining === undefined ? false : bool(req.body.notify_remaining);
     const customMessage = req.body.notification_message === undefined ? null : text(req.body.notification_message, 'رسالة التذكير', 10, 1000);
     const result = await transaction(db, async () => {
-      await db.query('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [key]);
       const previous = await (await db.query('SELECT * FROM payments WHERE request_key=?', [key])).rows[0];
       if (previous) {
         if (previous.student_id !== id || previous.amount !== amount || previous.recorded_by !== req.user.id) fail(409, 'مفتاح عملية مستخدم لطلب مختلف');
         return { id: previous.id, repeated: true };
       }
-      await db.query('SELECT id FROM students WHERE id=? FOR UPDATE', [id]);
+      await db.query('SELECT id FROM students WHERE id=?', [id]);
       const s = await studentRow(id); if (!s.active) fail(400, 'حساب الطالب معطل');
       if (s.cancelled_at) fail(400, 'الحجز ملغي ولا يقبل دفعات');
       if (amount > s.course_price_snapshot - await paidAmount(id)) fail(400, 'المبلغ أكبر من المتبقي على الطالب');
@@ -882,7 +880,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     fields(req.body, ['reason']); const reason = text(req.body.reason, 'سبب إلغاء الدفعة', 5, 300), id = integer(req.params.id);
     await transaction(db, async () => {
       const p = await (await db.query('SELECT * FROM payments WHERE id=?', [id])).rows[0]; if (!p) fail(404, 'الدفعة غير موجودة'); if (p.voided_at) fail(409, 'الدفعة ملغاة بالفعل');
-      await db.query(`UPDATE payments SET void_reason=?,voided_by=?,voided_at=to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') WHERE id=?`, [reason, req.user.id, id]);
+      await db.query(`UPDATE payments SET void_reason=?,voided_by=?,voided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, [reason, req.user.id, id]);
       await audit(db, req.user, 'إلغاء دفعة', 'student', p.student_id, { payment_id: id, amount: p.amount, reason });
     }); res.json({ ok: true });
   });
@@ -901,7 +899,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
         SUM(CASE WHEN s.cancelled_at IS NULL AND COALESCE(p.amount,0)>0 AND COALESCE(p.amount,0)<s.course_price_snapshot THEN 1 ELSE 0 END) partial,
         SUM(CASE WHEN s.cancelled_at IS NULL AND COALESCE(p.amount,0)>0 AND COALESCE(p.amount,0)>=s.course_price_snapshot THEN 1 ELSE 0 END) confirmed,
         SUM(COALESCE(p.amount,0)) paid,
-        SUM(CASE WHEN s.cancelled_at IS NULL THEN GREATEST(0,s.course_price_snapshot-COALESCE(p.amount,0)) ELSE 0 END) remaining
+        SUM(CASE WHEN s.cancelled_at IS NULL THEN MAX(0,s.course_price_snapshot-COALESCE(p.amount,0)) ELSE 0 END) remaining
       FROM students s LEFT JOIN paid p ON p.student_id=s.id WHERE s.active=1 GROUP BY s.level_id,s.group_id`, [])).rows;
     const daily = await courseStarted() ? await (await db.query(`SELECT e.group_id,COUNT(DISTINCT s.id) scheduled,
       COUNT(DISTINCT CASE WHEN a.id IS NOT NULL THEN s.id END) present
@@ -1068,7 +1066,7 @@ export function createApp({ db = openDatabase(), secureCookies = process.env.NOD
     if (res.headersSent) return next(error);
     let status = error.status || 500, message = error.message;
     if (status === 413) message = 'حجم ملف النسخة يتجاوز الحد المسموح (100 ميجابايت).';
-    if (error.code?.startsWith('ERR_SQLITE')) {
+    if (error.code?.startsWith('ERR_SQLITE') || error.message?.includes('constraint failed')) {
       if (message.includes('UNIQUE constraint')) { status = 409; message = 'هذه البيانات مسجلة بالفعل'; }
       else if (message.includes('FOREIGN KEY constraint')) { status = 409; message = 'السجل مرتبط ببيانات أخرى ولا يمكن حذفه أو استخدامه بهذه الطريقة'; }
     }

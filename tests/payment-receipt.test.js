@@ -282,22 +282,10 @@ test('payment API validates amounts and safely accepts idempotent retries', asyn
           : [] };
       }
       if (sql.includes("FROM system_wipe_requests") && sql.includes("status='processing'")) return { rows: [] };
-      if (sql.includes('pg_advisory_xact_lock')) {
-        const key = params[0];
-        const previous = lockTails.get(key) || Promise.resolve();
-        let release;
-        const current = new Promise(resolve => { release = resolve; });
-        lockTails.set(key, previous.then(() => current));
-        await previous;
-        const queue = lockReleases.get(key) || [];
-        queue.push(release);
-        lockReleases.set(key, queue);
-        return { rows: [] };
-      }
       if (sql.includes('SELECT * FROM payments WHERE request_key=?')) {
         return { rows: payments.filter(payment => payment.request_key === params[0]) };
       }
-      if (sql.includes('SELECT id FROM students WHERE id=? FOR UPDATE')) {
+      if (sql.includes('SELECT id FROM students WHERE id=?')) {
         return { rows: params[0] === student.id ? [{ id: student.id }] : [] };
       }
       if (sql.includes('FROM students s') && sql.includes('level_name')) return { rows: params[0] === student.id ? [{ ...student }] : [] };

@@ -28,23 +28,7 @@ async function recoverStaleRequest(db) {
 }
 
 export async function withSystemDataLock(db, callback) {
-  const client = await db.pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock($1)', [SYSTEM_DATA_LOCK_ID]);
-    const result = await callback();
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    try {
-      await client.query('ROLLBACK');
-    } catch (rollbackError) {
-      console.error('Failed to release the system-data transaction lock:', rollbackError);
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
+  return callback();
 }
 
 function createStorageClient() {
@@ -102,11 +86,12 @@ export async function removeAutomaticBackups({
 }
 
 async function truncateApplicationData(db) {
-  const result = await db.query(`SELECT table_name FROM information_schema.tables
-    WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name`);
+  const result = await db.query(`SELECT name as table_name FROM sqlite_master
+    WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`);
   const tables = result.rows.map(row => row.table_name).filter(name => !PRESERVED_TABLES.has(name));
-  if (tables.length) {
-    await db.query(`TRUNCATE TABLE ${tables.map(quoteIdentifier).join(', ')} RESTART IDENTITY CASCADE`);
+  for (const table of tables) {
+    await db.query(`DELETE FROM ${quoteIdentifier(table)}`);
+    await db.query(`DELETE FROM sqlite_sequence WHERE name=?`, [table]);
   }
   await db.query(`DELETE FROM users WHERE role='student'`);
 }
@@ -166,7 +151,9 @@ export function registerSystemResetRoutes(app, db, {
       }));
       res.status(201).json({ id: requestId });
     } catch (error) {
-      if (error.code === '23505') return res.status(409).json({ error: 'يوجد طلب مسح قائم بالفعل؛ راجعه قبل إرسال طلب آخر' });
+      if (error.code === '23505' || error.message?.includes('UNIQUE constraint failed')) {
+        return res.status(409).json({ error: 'يوجد طلب مسح قائم بالفعل؛ راجعه قبل إرسال طلب آخر' });
+      }
       next(error);
     }
   });
@@ -191,7 +178,7 @@ export function registerSystemResetRoutes(app, db, {
         const approvedAt = timestamp();
         const result = await transaction(db, async () => {
           const pending = (await db.query(`SELECT * FROM system_wipe_requests
-            WHERE id=? AND status='pending' FOR UPDATE`, [req.params.id])).rows[0];
+            WHERE id=? AND status='pending'`, [req.params.id])).rows[0];
           if (!pending) fail(409, 'الطلب غير موجود أو تمت معالجته بالفعل');
           if (pending.requester_id === req.user.id) fail(403, 'لا يمكن للدكتور الموافقة على طلب المسح الذي أرسله بنفسه');
           const approver = (await db.query(`SELECT id,name,username,role,active FROM users WHERE id=?`, [req.user.id])).rows[0];
@@ -209,7 +196,7 @@ export function registerSystemResetRoutes(app, db, {
         } catch (error) {
           console.error('System data wipe failed while removing course-library objects:', error);
           if (error.status === 503) throw error;
-          throw new SystemResetError(503, 'تعذر حذف ملفات مكتبة المحاضرات؛ تحقق من اتصال Neon وصلاحيات التخزين.');
+          throw new SystemResetError(503, 'تعذر حذف ملفات مكتبة المحاضرات؛ تحقق من الاتصال وصلاحيات التخزين.');
         } finally {
           storage?.destroy();
         }

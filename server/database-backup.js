@@ -97,8 +97,7 @@ export async function restoreDatabaseBackup(db, buffer, actor) {
       const columnsByTable = new Map();
       for (const table of tables) {
         const { rows } = await db.query(
-          `SELECT column_name FROM information_schema.columns
-           WHERE table_schema='public' AND table_name=? ORDER BY ordinal_position`, [table]
+          `SELECT name as column_name FROM pragma_table_info(?) ORDER BY cid`, [table]
         );
         columnsByTable.set(table, rows.map(row => row.column_name));
       }
@@ -107,7 +106,9 @@ export async function restoreDatabaseBackup(db, buffer, actor) {
       if (!allColumns || !allColumns.includes('username')) {
         throw new DatabaseBackupError('مخطط قاعدة البيانات غير متوافق مع ملف النسخة.');
       }
-      await db.query(`TRUNCATE TABLE ${tables.map(quoteIdentifier).join(', ')} RESTART IDENTITY CASCADE`);
+      for (const table of tables) {
+        await db.query(`DELETE FROM ${quoteIdentifier(table)}`);
+      }
 
       for (const table of tables) {
         const columns = columnsByTable.get(table);
@@ -129,15 +130,12 @@ export async function restoreDatabaseBackup(db, buffer, actor) {
 
       for (const table of tables) {
         if (!identityTables.has(table)) continue;
-        const sequence = await db.query(
-          `SELECT pg_get_serial_sequence(?, 'id') AS sequence`, [`public.${table}`]
-        );
-        if (sequence.rows[0]?.sequence) {
+        const maxResult = await db.query(`SELECT MAX(id) as max_id FROM ${quoteIdentifier(table)}`);
+        const maxId = maxResult.rows[0]?.max_id || 0;
+        if (maxId > 0) {
           await db.query(
-            `SELECT setval(pg_get_serial_sequence(?, 'id'),
-              COALESCE((SELECT MAX(id) FROM ${quoteIdentifier(table)}), 1),
-              EXISTS(SELECT 1 FROM ${quoteIdentifier(table)}))`,
-            [`public.${table}`]
+            `INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)`,
+            [table, maxId]
           );
         }
       }
@@ -147,7 +145,7 @@ export async function restoreDatabaseBackup(db, buffer, actor) {
     });
   } catch (error) {
     if (error instanceof DatabaseBackupError) throw error;
-    console.error('PostgreSQL backup restore failed:', error);
+    console.error('Backup restore failed:', error);
     throw new DatabaseBackupError('فشل التحقق من النسخة أو استعادتها؛ لم يتم اعتماد أي تغيير.');
   }
 }
